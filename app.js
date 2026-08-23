@@ -509,6 +509,13 @@ const guideDocEl = document.getElementById('study-guide-doc');
 const guideFootEl = document.getElementById('study-guide-foot');
 const guidePautaBtn = document.getElementById('study-guide-pauta-btn');
 const toastStackEl = document.getElementById('toast-stack');
+// Panel de control interno (ver sección 8B). El punto del pie es su única
+// entrada visible, y es discreto a propósito: no es una herramienta del alumno.
+const adminOverlayEl  = document.getElementById('admin-overlay');
+const adminSubtitleEl = document.getElementById('admin-subtitle');
+const adminBodyEl     = document.getElementById('admin-body');
+const adminFootEl     = document.getElementById('admin-foot');
+const adminOpenBtn    = document.getElementById('admin-open-btn');
 
 /* -------------------------------------------------------------------------
    3. ESTADO
@@ -1195,7 +1202,29 @@ function getAnalysis(course){
    ------------------------------------------------------------------------- */
 
 // URL del Worker desplegado (wrangler deploy la imprime al publicar).
-const WORKER_URL = 'https://agentedestudio.granizovicente6.workers.dev';
+const WORKER_ENDPOINT = 'https://agentedestudio.granizovicente6.workers.dev';
+
+/* Al desarrollar se puede apuntar la app a un Worker local (`wrangler dev`, que
+   levanta su propia D1 en disco) sin tocar este archivo:
+
+     localStorage.workerUrlOverride = 'http://127.0.0.1:8787'
+
+   Solo se lee cuando la página se está sirviendo DESDE localhost. En producción
+   la constante de arriba manda siempre, y no es un detalle de estilo: por aquí
+   viaja el PIN del panel de administración, y un endpoint que se pueda cambiar
+   desde el almacenamiento del navegador sería una forma de que ese PIN termine
+   en un servidor que eligió otro. */
+function resolveWorkerUrl(){
+  const host = location.hostname;
+  if(host !== 'localhost' && host !== '127.0.0.1' && host !== '[::1]') return WORKER_ENDPOINT;
+  try{
+    const override = String(localStorage.getItem('workerUrlOverride') || '').trim();
+    if(/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(override)) return override;
+  }catch(e){ /* almacenamiento no disponible */ }
+  return WORKER_ENDPOINT;
+}
+
+const WORKER_URL = resolveWorkerUrl();
 
 // Topes espejo de los del Worker: evitan enviar cuerpos que el proxy rechazaría.
 const AI_MAX_QUESTIONS = 120;
@@ -1561,6 +1590,7 @@ async function runAiAnalysis(course){
       questionCount: questions.length
     };
     savePastEvals();
+    trackEvent('course_analyzed', { course });
     return true;
   }catch(err){
     showAiError(err.message || 'No se pudo completar el análisis con Claude IA.');
@@ -1570,6 +1600,168 @@ async function runAiAnalysis(course){
     setAiLoading(false);
   }
 }
+
+/* -------------------------------------------------------------------------
+   5C. TELEMETRÍA DE USO (anónima)
+
+   Para saber si el agente se usa —y con qué— hace falta contar algo. Lo que se
+   cuenta aquí es lo mínimo: un identificador anónimo que este navegador se
+   inventa la primera vez, el tipo de evento, la carrera y el ramo. Nunca sale
+   de aquí nada del alumno: ni sus evaluaciones, ni sus notas, ni su nombre, ni
+   el texto que escribe. El identificador no se cruza con nada porque no hay
+   nada con qué cruzarlo: la app no tiene cuentas.
+
+   Los eventos van al mismo Worker que ya usa la app (ver sección 5B), que los
+   guarda en una D1. Nada de esto puede afectar al alumno: la cola se envía en
+   lotes, en segundo plano, y cualquier fallo se traga en silencio. Si el Worker
+   no tiene la base configurada, responde 503 y aquí no pasa nada.
+
+   Para desactivarla en un navegador basta con `localStorage.telemetryOff = '1'`.
+   ------------------------------------------------------------------------- */
+const TELEMETRY_ENDPOINT = `${String(WORKER_URL).replace(/\/+$/, '')}/api/telemetry`;
+
+const TELEMETRY_ID_KEY   = 'telemetryUserId';   // localStorage: el UUID anónimo
+const TELEMETRY_OFF_KEY  = 'telemetryOff';      // localStorage: interruptor de apagado
+const TELEMETRY_SEEN_KEY = 'telemetrySeen';     // sessionStorage: lo ya contado en esta visita
+
+// Los eventos se acumulan y se mandan juntos: un evento por clic serían decenas
+// de escrituras por alumno y por sesión, y la parte gratuita de D1 no está para
+// eso. Cuatro segundos son suficientes para agrupar una ráfaga de navegación sin
+// que un evento quede esperando si el alumno cierra la pestaña enseguida (de eso
+// se encarga el envío con sendBeacon del `pagehide`).
+const TELEMETRY_FLUSH_MS  = 4000;
+const TELEMETRY_MAX_QUEUE = 20;   // espejo del tope del Worker (25), con holgura
+
+// Identificador anónimo. `crypto.randomUUID` es lo normal; lo demás son
+// respaldos para navegadores viejos o contextos sin `crypto`.
+function newAnonId(){
+  try{
+    if(window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+    if(window.crypto && typeof crypto.getRandomValues === 'function'){
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    }
+  }catch(e){ /* sin crypto disponible */ }
+  return (Date.now().toString(16) + Math.random().toString(16).slice(2)).slice(0, 32).padEnd(24, '0');
+}
+
+// Formato que acepta el Worker (ver cleanUserId): hexadecimal con o sin guiones.
+const ANON_ID_RE = /^[a-f0-9-]{16,64}$/;
+
+let telemetryIdCache = '';
+function telemetryId(){
+  if(telemetryIdCache) return telemetryIdCache;
+  let id = '';
+  try{ id = String(localStorage.getItem(TELEMETRY_ID_KEY) || '').toLowerCase(); }
+  catch(e){ /* almacenamiento no disponible */ }
+  if(!ANON_ID_RE.test(id)){
+    id = newAnonId().toLowerCase();
+    // En navegación privada esto falla y el id dura lo que la pestaña: esa
+    // visita se cuenta como un visitante nuevo. Es el precio de no poner
+    // cookies ni huellas de navegador para reconocer a nadie.
+    try{ localStorage.setItem(TELEMETRY_ID_KEY, id); }catch(e){ /* sin almacenamiento */ }
+  }
+  telemetryIdCache = id;
+  return id;
+}
+
+function telemetryEnabled(){
+  try{ return localStorage.getItem(TELEMETRY_OFF_KEY) !== '1'; }
+  catch(e){ return true; }
+}
+
+/* Lo que ya se contó en esta visita. Vive en sessionStorage y no en memoria para
+   que recargar la página no vuelva a sumar el ramo que ya estaba abierto: una
+   recarga es la misma visita mirando lo mismo. La sesión sí se cierra al cerrar
+   la pestaña, que es exactamente lo que "sesión" quiere decir aquí. */
+function telemetrySeen(){
+  try{
+    const raw = sessionStorage.getItem(TELEMETRY_SEEN_KEY);
+    return new Set(raw ? JSON.parse(raw) : []);
+  }catch(e){ return new Set(); }
+}
+function rememberTelemetrySeen(seen){
+  try{ sessionStorage.setItem(TELEMETRY_SEEN_KEY, JSON.stringify(Array.from(seen))); }
+  catch(e){ /* sin almacenamiento de sesión: se contará de nuevo, no es grave */ }
+}
+
+let telemetryQueue = [];
+let telemetryTimer = 0;
+
+// El envío. `beacon` es para el cierre de la pestaña: sendBeacon sobrevive a la
+// página, un fetch normal no siempre. El tipo text/plain evita el preflight
+// CORS —es un tipo "seguro" para el navegador— y al Worker le da lo mismo,
+// porque lee el cuerpo como texto y lo parsea él.
+function sendTelemetry(events, { beacon = false } = {}){
+  if(!events.length) return;
+  const body = JSON.stringify({ userId: telemetryId(), events });
+  try{
+    if(beacon && navigator.sendBeacon){
+      navigator.sendBeacon(TELEMETRY_ENDPOINT, new Blob([body], { type: 'text/plain;charset=UTF-8' }));
+      return;
+    }
+    fetch(TELEMETRY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain;charset=UTF-8' },
+      body,
+      keepalive: true
+    }).catch(() => { /* contar el uso no puede molestar a quien está estudiando */ });
+  }catch(e){ /* idem */ }
+}
+
+function flushTelemetry({ beacon = false } = {}){
+  if(telemetryTimer){ clearTimeout(telemetryTimer); telemetryTimer = 0; }
+  if(!telemetryQueue.length) return;
+  const batch = telemetryQueue;
+  telemetryQueue = [];
+  sendTelemetry(batch, { beacon });
+}
+
+/* Registra un evento. `course` se omite en lo que no es de un ramo concreto
+   (abrir la app, elegir carrera). El nombre del ramo ES su identificador en esta
+   app —no hay códigos— así que es lo que viaja como `course_id`; la carrera
+   viaja como su clave ('comercial'), que es estable aunque cambie el rótulo. */
+function trackEvent(type, { career, course } = {}){
+  if(!telemetryEnabled()) return;
+
+  telemetryQueue.push({
+    type,
+    career: career || activeCareer,
+    course: course || '',
+    ts: Date.now()
+  });
+
+  if(telemetryQueue.length >= TELEMETRY_MAX_QUEUE){ flushTelemetry(); return; }
+  if(!telemetryTimer) telemetryTimer = setTimeout(() => flushTelemetry(), TELEMETRY_FLUSH_MS);
+}
+
+// Una sola vez por visita. Lo usan el arranque ("session_start") y el paso por
+// un ramo ("course_viewed"): sin esto, un alumno que va y vuelve entre dos ramos
+// mientras estudia dejaría cincuenta filas diciendo lo mismo.
+function trackOnce(key, type, opts){
+  if(!telemetryEnabled()) return;
+  const seen = telemetrySeen();
+  if(seen.has(key)) return;
+  seen.add(key);
+  rememberTelemetrySeen(seen);
+  trackEvent(type, opts);
+}
+
+// Paso por un ramo. Una vez por ramo y visita: ir y volver entre dos ramos
+// mientras se estudia no son veinte visitas al ramo. Es lo que alimenta el
+// ranking de "ramos más estudiados" del panel.
+function trackCourseView(course){
+  if(!course) return;
+  trackOnce(`ramo:${activeCareer}:${course}`, 'course_viewed', { course });
+}
+
+// La cola pendiente se vacía cuando la pestaña se va a segundo plano o se
+// cierra. En móvil `pagehide` es lo único fiable: muchos navegadores nunca
+// disparan `unload`.
+window.addEventListener('pagehide', () => flushTelemetry({ beacon: true }));
+document.addEventListener('visibilitychange', () => {
+  if(document.visibilityState === 'hidden') flushTelemetry({ beacon: true });
+});
 
 /* -------------------------------------------------------------------------
    5B. CARRERA ACTIVA: CABECERA, DESPLEGABLE Y PANTALLA DE SELECCIÓN
@@ -1798,6 +1990,10 @@ function switchCareer(careerId){
   sessionReady = true;
   saveSession();
 
+  // El ramo con el que se retoma la carrera cuenta como visitado: para el panel
+  // es actividad en ese ramo igual que si se hubiera hecho clic en su píldora.
+  trackCourseView(activeCourse);
+
   if(careerSelectorOpen) closeCareerSelector();
 }
 
@@ -1817,6 +2013,7 @@ function renderDrawers(){
       activeCourse = cat.courses[0];
       planUsesEvals = false;
       sessionRestored = false;
+      trackCourseView(activeCourse);
       renderAll();
       saveSession();
     };
@@ -1834,6 +2031,7 @@ function renderPicker(){
       activeCourse = course;
       planUsesEvals = false;
       sessionRestored = false;
+      trackCourseView(activeCourse);
       renderAll();
       saveSession();
     };
@@ -2621,7 +2819,7 @@ function questionCount(course){
 function releaseModalLock(){
   if(testState || practiceState || flashcardsState || feynmanState ||
      topicChatState || studySessionState || examState || sheetState ||
-     guideState || careerSelectorOpen) return;
+     guideState || careerSelectorOpen || adminState) return;
   document.body.classList.remove('modal-open');
 }
 
@@ -3326,6 +3524,8 @@ function openPractice(course, topicId, { regenerate = false } = {}){
     controller: cached ? null : new AbortController()
   };
 
+  trackEvent('practice_used', { course });
+
   practiceOverlayEl.hidden = false;
   document.body.classList.add('modal-open');
   document.addEventListener('keydown', onPracticeKeydown);
@@ -3672,6 +3872,8 @@ function openFlashcards(course, topicId, { regenerate = false } = {}){
     error: '',
     controller: cached ? null : new AbortController()
   };
+
+  trackEvent('flashcard_used', { course });
 
   flashcardsOverlayEl.hidden = false;
   document.body.classList.add('modal-open');
@@ -4320,6 +4522,8 @@ function openExamSimulation(course){
     result: null,
     saved: false
   };
+
+  trackEvent('exam_simulated', { course });
 
   examOverlayEl.hidden = false;
   document.body.classList.add('modal-open');
@@ -5490,6 +5694,8 @@ function openStudyGuide(course, topicId, { regenerate = false } = {}){
     controller: stored ? null : new AbortController()
   };
 
+  trackEvent('guide_generated', { course });
+
   guideOverlayEl.hidden = false;
   document.body.classList.add('modal-open');
   document.addEventListener('keydown', onStudyGuideKeydown);
@@ -6514,6 +6720,8 @@ function openStudySession(course, topicId){
     completed: false
   };
 
+  trackEvent('class_started', { course });
+
   sessionOverlayEl.hidden = false;
   document.body.classList.add('modal-open');
   document.addEventListener('keydown', onStudySessionKeydown);
@@ -6913,6 +7121,7 @@ function markTopicMastered(course, topicId){
   // Mismo cierre que el veredicto logrado del profesor: el tema cuenta como
   // practicado. (markPracticed guarda por su cuenta.)
   markPracticed(course, topicId, { hits: 1, total: 1 });
+  trackEvent('topic_mastered', { course });
   return true;
 }
 
@@ -7155,6 +7364,614 @@ if(sessionInputEl) sessionInputEl.addEventListener('keydown', ev => {
     if(sessionFormEl) sessionFormEl.requestSubmit();
   }
 });
+
+/* -------------------------------------------------------------------------
+   8B. PANEL DE CONTROL (administración)
+
+   La otra cara de la telemetría de la sección 5C: aquí se leen los eventos que
+   allá se escriben. Es una vista interna —no forma parte de lo que el alumno
+   viene a hacer— así que no tiene entrada en la interfaz normal: se abre con
+   `?admin=true` (o `?mode=dashboard`) en la URL, o con el punto discreto del
+   pie de página. En los dos casos hay que escribir el PIN, que el Worker guarda
+   como secreto y que nunca viaja en el HTML ni en este archivo.
+
+   Todas las métricas llegan en una sola respuesta del Worker: son seis tarjetas
+   que se leen juntas y no tiene sentido pagar seis viajes de red. Aquí solo se
+   pintan.
+
+   Un detalle que la vista repite porque importa al leer los números: los
+   visitantes son de siempre (salen del censo, que no se poda) y la actividad
+   —ramos, herramientas, tabla— es del rango elegido.
+   ------------------------------------------------------------------------- */
+const ADMIN_ENDPOINT = `${String(WORKER_URL).replace(/\/+$/, '')}/api/admin/stats`;
+
+// Rangos que acepta el Worker. `0` es "todo el historial".
+const ADMIN_RANGES = [
+  { days: 7,  label: '7 días' },
+  { days: 30, label: '30 días' },
+  { days: 90, label: '90 días' },
+  { days: 0,  label: 'Todo' }
+];
+
+// Las cuatro herramientas del plan más el simulacro: entre ellas se reparte el
+// 100% de la tarjeta de uso. El orden es el del panel.
+const ADMIN_TOOLS = [
+  { type: 'class_started',   icon: '🎓', label: 'Clases guiadas' },
+  { type: 'practice_used',   icon: '✍️', label: 'Práctica' },
+  { type: 'flashcard_used',  icon: '🃏', label: 'Flashcards' },
+  { type: 'guide_generated', icon: '📄', label: 'Guías de estudio' },
+  { type: 'exam_simulated',  icon: '📝', label: 'Simulacros' }
+];
+
+// Cómo se nombra cada evento en la tabla de actividad reciente.
+const ADMIN_EVENT_LABELS = {
+  session_start:   { icon: '👋', label: 'Abrió la app' },
+  course_viewed:   { icon: '👀', label: 'Vio un ramo' },
+  course_analyzed: { icon: '🔍', label: 'Analizó el temario' },
+  class_started:   { icon: '🎓', label: 'Clase guiada' },
+  practice_used:   { icon: '✍️', label: 'Práctica' },
+  flashcard_used:  { icon: '🃏', label: 'Flashcards' },
+  guide_generated: { icon: '📄', label: 'Guía de estudio' },
+  exam_simulated:  { icon: '📝', label: 'Simulacro' },
+  topic_mastered:  { icon: '🟢', label: 'Tema dominado' }
+};
+
+const ADMIN_TIMEOUT_MS = 20000;
+
+/* Estado del panel. `pin` vive solo en memoria: se pide de nuevo cada vez que se
+   abre la vista, que es lo correcto para algo que se mira una vez a la semana y
+   evita dejarlo escrito en el almacenamiento del navegador. */
+let adminState = null;
+
+function adminNumber(n){
+  const v = Number(n) || 0;
+  try{ return v.toLocaleString('es-CL'); }
+  catch(e){ return String(v); }
+}
+
+function adminDateTime(ms){
+  if(!ms) return '—';
+  const d = new Date(Number(ms));
+  try{
+    return d.toLocaleString('es-CL', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' });
+  }catch(e){ return d.toLocaleString(); }
+}
+
+function adminDay(ms){
+  if(!ms) return '—';
+  const d = new Date(Number(ms));
+  try{ return d.toLocaleDateString('es-CL', { day:'numeric', month:'long', year:'numeric' }); }
+  catch(e){ return d.toLocaleDateString(); }
+}
+
+// "hace 4 min", "hace 3 h", "hace 2 días". En una tabla de actividad en vivo se
+// lee mucho mejor que una fecha completa repetida sesenta veces.
+function adminAgo(ms){
+  const diff = Date.now() - Number(ms || 0);
+  if(!Number.isFinite(diff) || diff < 0) return 'ahora';
+  const min = Math.floor(diff / 60000);
+  if(min < 1)  return 'recién';
+  if(min < 60) return `hace ${min} min`;
+  const h = Math.floor(min / 60);
+  if(h < 24)   return `hace ${h} h`;
+  const d = Math.floor(h / 24);
+  return `hace ${d} ${plural(d, 'día', 'días')}`;
+}
+
+// La carrera viaja como clave ('comercial'): el panel la muestra con el rótulo y
+// el ícono del modelo, y cae al valor crudo si algún día se guardó otra cosa.
+function adminCareerLabel(id){
+  const info = CAREERS[id];
+  return info ? `${info.icon} ${info.label}` : (id || '—');
+}
+
+/* --- Llamada al Worker ------------------------------------------------------ */
+
+async function requestAdminStats(pin, days, signal){
+  const response = await fetch(ADMIN_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ pin, days }),
+    signal
+  });
+
+  let data = null;
+  try{ data = await response.json(); }catch(e){ /* respuesta no-JSON */ }
+
+  if(!response.ok || !data || !data.ok){
+    const msg = (data && data.error) || `El panel respondió ${response.status}.`;
+    const err = new Error(msg);
+    err.status = response.status;
+    throw err;
+  }
+  return data;
+}
+
+/* --- Apertura y cierre ------------------------------------------------------ */
+
+function openAdminDashboard(){
+  if(!adminOverlayEl) return;
+  if(adminState) return;   // ya está abierto
+
+  adminState = {
+    status: 'pin',      // pin → loading → ready | error
+    pin: '',
+    days: 30,
+    data: null,
+    error: '',
+    controller: null,
+    loadedAt: 0
+  };
+
+  adminOverlayEl.hidden = false;
+  document.body.classList.add('modal-open');
+  document.addEventListener('keydown', onAdminKeydown);
+  renderAdminDashboard();
+}
+
+function closeAdminDashboard(){
+  if(!adminState) return;
+  if(adminState.controller) adminState.controller.abort();
+  adminState = null;
+  adminOverlayEl.hidden = true;
+  releaseModalLock();
+  document.removeEventListener('keydown', onAdminKeydown);
+
+  // El panel se abre por URL: si se cierra sin limpiarla, recargar lo vuelve a
+  // abrir y pedir el PIN. Se borran solo los parámetros del panel.
+  clearAdminUrlParams();
+}
+
+function onAdminKeydown(ev){
+  if(!adminState) return;
+  if(ev.key === 'Escape'){ ev.preventDefault(); closeAdminDashboard(); }
+}
+
+// Pide los datos con el PIN y el rango que haya en el estado.
+function loadAdminStats(){
+  const s = adminState;
+  if(!s || !s.pin) return;
+
+  if(s.controller) s.controller.abort();
+  s.controller = new AbortController();
+  s.status = 'loading';
+  s.error = '';
+  renderAdminDashboard();
+
+  const attempt = s.controller;
+  // Un panel que se queda cargando para siempre no dice nada: pasado el tope, la
+  // petición se corta y el estado de error explica qué pasó.
+  const timeout = setTimeout(() => { try{ attempt.abort(); }catch(e){} }, ADMIN_TIMEOUT_MS);
+
+  requestAdminStats(s.pin, s.days, attempt.signal)
+    .then(data => {
+      clearTimeout(timeout);
+      if(adminState !== s || s.controller !== attempt) return;
+      s.status = 'ready';
+      s.data = data;
+      s.loadedAt = Date.now();
+      s.controller = null;
+      renderAdminDashboard();
+    })
+    .catch(err => {
+      clearTimeout(timeout);
+      if(adminState !== s || s.controller !== attempt) return;
+      // Si llegó hasta aquí abortado, fue el tope de tiempo: los otros dos
+      // abortos —cerrar el panel y pedir otro rango— ya salieron arriba, porque
+      // cambian `adminState` o `s.controller`.
+      if(attempt.signal.aborted){
+        s.controller = null;
+        s.status = 'error';
+        s.error = 'El panel tardó demasiado en responder. Vuelve a intentarlo.';
+        renderAdminDashboard();
+        return;
+      }
+      s.controller = null;
+      // Un PIN rechazado no es un error del panel: es volver a la puerta.
+      if(err.status === 401){
+        s.status = 'pin';
+        s.pin = '';
+        s.error = 'PIN incorrecto. Inténtalo de nuevo.';
+      } else {
+        s.status = 'error';
+        s.error = err.message || 'No se pudieron leer las métricas de uso.';
+      }
+      renderAdminDashboard();
+    });
+}
+
+/* --- Render ----------------------------------------------------------------- */
+
+function renderAdminDashboard(){
+  const s = adminState;
+  if(!s || !adminBodyEl) return;
+
+  if(adminSubtitleEl){
+    adminSubtitleEl.textContent = s.status === 'ready' && s.data
+      ? `Datos anónimos de uso · actualizado ${adminDateTime(s.loadedAt)}`
+      : 'Métricas anónimas de uso del agente de estudio.';
+  }
+
+  if(s.status === 'pin')     adminBodyEl.innerHTML = adminPinHtml(s);
+  else if(s.status === 'loading') adminBodyEl.innerHTML = adminLoadingHtml();
+  else if(s.status === 'error')   adminBodyEl.innerHTML = adminErrorHtml(s);
+  else                            adminBodyEl.innerHTML = adminStatsHtml(s.data);
+
+  if(adminFootEl){
+    adminFootEl.hidden = s.status !== 'ready';
+    if(s.status === 'ready') adminFootEl.innerHTML = adminFootHtml(s);
+  }
+
+  // La puerta se abre escribiendo: el foco va al campo sin que haya que buscarlo.
+  if(s.status === 'pin'){
+    const input = adminBodyEl.querySelector('#admin-pin-input');
+    if(input) input.focus();
+  }
+}
+
+function adminPinHtml(s){
+  return `
+    <div class="admin-gate">
+      <p class="admin-gate-icon" aria-hidden="true">🔒</p>
+      <h3 class="admin-gate-title">Panel de control interno</h3>
+      <p class="admin-gate-text">Métricas anónimas de uso del agente: visitantes, ramos más
+      estudiados y herramientas más usadas. Escribe el PIN para entrar.</p>
+      <form class="admin-gate-form" data-action="admin-pin">
+        <input type="password" id="admin-pin-input" class="admin-pin-input"
+               inputmode="numeric" autocomplete="off" placeholder="PIN"
+               aria-label="PIN del panel de control">
+        <button type="submit" class="primary-btn">Entrar</button>
+      </form>
+      ${s.error ? `<p class="admin-gate-error">${escapeHtml(s.error)}</p>` : ''}
+      <p class="admin-gate-note">El PIN vive como secreto en el Worker, no en esta página.
+      Los datos que verás no identifican a nadie: no hay cuentas, correos ni nombres.</p>
+    </div>`;
+}
+
+function adminLoadingHtml(){
+  return `
+    <div class="practice-loading" aria-live="polite">
+      <span class="ai-spinner" aria-hidden="true"></span>
+      <p class="practice-loading-text">Leyendo el registro de uso...</p>
+    </div>`;
+}
+
+function adminErrorHtml(s){
+  return `
+    <div class="admin-error">
+      <p class="ai-error">${escapeHtml(s.error)}</p>
+      <p class="admin-gate-note">Si es la primera vez que abres el panel, revisa que el Worker
+      tenga creada la base D1 (binding <code>DB</code>) y el secreto <code>ADMIN_PIN</code>.
+      Están documentados en <code>worker/README.md</code>.</p>
+      <div class="eval-actions">
+        <button type="button" class="ghost-btn" data-action="close-admin">Cerrar</button>
+        <button type="button" class="primary-btn" data-action="admin-retry">Reintentar</button>
+      </div>
+    </div>`;
+}
+
+// Una barra de porcentaje con su rótulo. La usan el ranking de ramos y el de
+// herramientas; `tone` solo cambia el color del relleno.
+function adminBarHtml({ label, meta, value, pct, tone }){
+  const width = Math.max(2, Math.min(100, Math.round(pct)));
+  return `
+    <li class="admin-bar-row">
+      <div class="admin-bar-head">
+        <span class="admin-bar-label">${label}</span>
+        <span class="admin-bar-value">${value}</span>
+      </div>
+      <div class="admin-bar-track">
+        <div class="admin-bar-fill${tone ? ' is-' + tone : ''}" style="width:${width}%"></div>
+      </div>
+      ${meta ? `<p class="admin-bar-meta">${meta}</p>` : ''}
+    </li>`;
+}
+
+function adminStatsHtml(data){
+  if(!data) return '';
+  const users = data.users || {};
+  const range = ADMIN_RANGES.find(r => r.days === data.days);
+  const rangeLabel = range ? range.label.toLowerCase() : `${data.days} días`;
+  const rangeText  = data.days ? `últimos ${rangeLabel}` : 'todo el historial';
+
+  // Todavía sin datos: decirlo es más útil que mostrar seis ceros bien pintados.
+  if(!users.total && !(data.events && data.events.inRange)){
+    return `
+      <div class="admin-empty">
+        <p class="admin-gate-icon" aria-hidden="true">📭</p>
+        <h3 class="admin-gate-title">Todavía no hay eventos registrados</h3>
+        <p class="admin-gate-text">La base está conectada y responde, pero aún no ha llegado
+        ninguna visita. Abre la app en otra pestaña, entra a un ramo o a una clase guiada y
+        vuelve a actualizar este panel.</p>
+      </div>`;
+  }
+
+  return `
+    ${adminCardsHtml(data, rangeText)}
+    <div class="admin-columns">
+      ${adminCoursesHtml(data, rangeText)}
+      ${adminToolsHtml(data, rangeText)}
+    </div>
+    ${adminCareersHtml(data, rangeText)}
+    ${adminDailyHtml(data)}
+    ${adminRecentHtml(data)}`;
+}
+
+function adminCardsHtml(data, rangeText){
+  const u = data.users || {};
+  const ev = data.events || {};
+  return `
+    <section class="admin-section">
+      <div class="admin-cards">
+        <article class="stat-card">
+          <p class="stat-card-icon" aria-hidden="true">👥</p>
+          <p class="stat-card-value">${adminNumber(u.total)}</p>
+          <h3 class="stat-card-label">Visitantes únicos totales</h3>
+          <p class="stat-card-note">Navegadores distintos desde ${u.since ? adminDay(u.since) : 'el inicio'}.
+          Este número es de siempre, no del rango.</p>
+        </article>
+
+        <article class="stat-card">
+          <p class="stat-card-icon" aria-hidden="true">⚡</p>
+          <p class="stat-card-value">${adminNumber(u.active7)}</p>
+          <h3 class="stat-card-label">Activos en 7 días</h3>
+          <p class="stat-card-note"><b>${adminNumber(u.active30)}</b> en los últimos 30 días.</p>
+        </article>
+
+        <article class="stat-card">
+          <p class="stat-card-icon" aria-hidden="true">🌱</p>
+          <p class="stat-card-value">${adminNumber(u.newInRange)}</p>
+          <h3 class="stat-card-label">Visitantes nuevos</h3>
+          <p class="stat-card-note">Llegaron por primera vez en ${rangeText}.</p>
+        </article>
+
+        <article class="stat-card">
+          <p class="stat-card-icon" aria-hidden="true">📈</p>
+          <p class="stat-card-value">${adminNumber(ev.inRange)}</p>
+          <h3 class="stat-card-label">Eventos registrados</h3>
+          <p class="stat-card-note">Acciones anónimas en ${rangeText}.</p>
+        </article>
+      </div>
+    </section>`;
+}
+
+function adminCoursesHtml(data, rangeText){
+  const rows = (data.courses || []).slice(0, 10);
+  if(!rows.length){
+    return `
+      <section class="admin-panel">
+        <h3 class="admin-panel-title">📚 Ramos más estudiados</h3>
+        <p class="admin-panel-empty">Nadie ha entrado todavía a un ramo en ${rangeText}.</p>
+      </section>`;
+  }
+  const top = rows[0].events || 1;
+  return `
+    <section class="admin-panel">
+      <h3 class="admin-panel-title">📚 Ramos más estudiados</h3>
+      <p class="admin-panel-sub">Por actividad en ${rangeText}.</p>
+      <ol class="admin-bars">
+        ${rows.map((r, i) => adminBarHtml({
+          label: `<span class="admin-rank">${i + 1}</span>${escapeHtml(r.course || '—')}`,
+          value: `${adminNumber(r.events)} ${plural(r.events, 'evento', 'eventos')}`,
+          meta: `${adminNumber(r.users)} ${plural(r.users, 'visitante', 'visitantes')} · ${adminCareerLabel(r.career)}`,
+          pct: (r.events / top) * 100,
+          tone: 'blue'
+        })).join('')}
+      </ol>
+    </section>`;
+}
+
+function adminToolsHtml(data, rangeText){
+  const byType = new Map((data.tools || []).map(t => [t.type, t]));
+  const rows = ADMIN_TOOLS.map(tool => {
+    const hit = byType.get(tool.type);
+    return { ...tool, events: (hit && hit.events) || 0, users: (hit && hit.users) || 0 };
+  });
+  const total = rows.reduce((n, r) => n + r.events, 0);
+
+  if(!total){
+    return `
+      <section class="admin-panel">
+        <h3 class="admin-panel-title">🚀 Herramientas más usadas</h3>
+        <p class="admin-panel-empty">Todavía no se ha abierto ninguna herramienta en ${rangeText}.</p>
+      </section>`;
+  }
+
+  const sorted = rows.slice().sort((a, b) => b.events - a.events);
+  return `
+    <section class="admin-panel">
+      <h3 class="admin-panel-title">🚀 Herramientas más usadas</h3>
+      <p class="admin-panel-sub">Reparto del uso en ${rangeText} · ${adminNumber(total)} aperturas.</p>
+      <ol class="admin-bars">
+        ${sorted.map(r => adminBarHtml({
+          label: `<span class="admin-tool-icon" aria-hidden="true">${r.icon}</span>${escapeHtml(r.label)}`,
+          value: `${Math.round((r.events / total) * 100)}%`,
+          meta: `${adminNumber(r.events)} ${plural(r.events, 'apertura', 'aperturas')} · ${adminNumber(r.users)} ${plural(r.users, 'visitante', 'visitantes')}`,
+          pct: (r.events / total) * 100,
+          tone: 'gold'
+        })).join('')}
+      </ol>
+    </section>`;
+}
+
+function adminCareersHtml(data, rangeText){
+  const rows = data.careers || [];
+  if(!rows.length) return '';
+  const total = rows.reduce((n, r) => n + (r.events || 0), 0) || 1;
+  return `
+    <section class="admin-panel admin-panel-wide">
+      <h3 class="admin-panel-title">🎓 Carreras</h3>
+      <p class="admin-panel-sub">Reparto de la actividad en ${rangeText}.</p>
+      <ol class="admin-bars admin-bars-flat">
+        ${rows.map(r => adminBarHtml({
+          label: escapeHtml(adminCareerLabel(r.career)),
+          value: `${Math.round(((r.events || 0) / total) * 100)}%`,
+          meta: `${adminNumber(r.users)} ${plural(r.users, 'visitante', 'visitantes')} · ${adminNumber(r.events)} ${plural(r.events, 'evento', 'eventos')}`,
+          pct: ((r.events || 0) / total) * 100,
+          tone: 'green'
+        })).join('')}
+      </ol>
+    </section>`;
+}
+
+/* Actividad de los últimos 14 días. Las columnas se arman a partir del
+   calendario y no de lo que devolvió la consulta: un día sin eventos tiene que
+   aparecer como un hueco, no desaparecer y correr el resto de la serie. Las
+   fechas son UTC, que es como las agrupa SQLite; la leyenda lo dice. */
+function adminDailyHtml(data){
+  const rows = new Map((data.daily || []).map(r => [r.day, r]));
+  const days = [];
+  const today = new Date();
+  for(let i = 13; i >= 0; i--){
+    const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+    const key = d.toISOString().slice(0, 10);
+    const hit = rows.get(key);
+    days.push({
+      key,
+      label: `${d.getUTCDate()}/${d.getUTCMonth() + 1}`,
+      events: (hit && hit.events) || 0,
+      users: (hit && hit.users) || 0
+    });
+  }
+  const top = days.reduce((max, d) => Math.max(max, d.events), 0);
+  if(!top) return '';
+
+  return `
+    <section class="admin-panel admin-panel-wide">
+      <h3 class="admin-panel-title">📅 Actividad de los últimos 14 días</h3>
+      <p class="admin-panel-sub">Eventos por día (fechas UTC).</p>
+      <div class="admin-chart" role="img"
+           aria-label="Eventos por día durante los últimos catorce días">
+        ${days.map(d => `
+          <div class="admin-chart-col" title="${d.label}: ${adminNumber(d.events)} ${plural(d.events, 'evento', 'eventos')}, ${adminNumber(d.users)} ${plural(d.users, 'visitante', 'visitantes')}">
+            <span class="admin-chart-bar${d.events ? '' : ' is-empty'}"
+                  style="height:${d.events ? Math.max(6, Math.round((d.events / top) * 100)) : 2}%"></span>
+            <span class="admin-chart-day">${d.label}</span>
+          </div>`).join('')}
+      </div>
+    </section>`;
+}
+
+function adminRecentHtml(data){
+  const rows = data.recent || [];
+  if(!rows.length) return '';
+  return `
+    <section class="admin-panel admin-panel-wide">
+      <h3 class="admin-panel-title">🕒 Actividad reciente</h3>
+      <p class="admin-panel-sub">Los últimos ${rows.length} eventos, sin filtrar por rango.
+      El visitante se muestra por el prefijo de su identificador anónimo.</p>
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th scope="col">Cuándo</th>
+              <th scope="col">Visitante</th>
+              <th scope="col">Evento</th>
+              <th scope="col">Ramo</th>
+              <th scope="col">Carrera</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => {
+              const ev = ADMIN_EVENT_LABELS[r.type] || { icon: '•', label: r.type };
+              return `
+              <tr>
+                <td class="admin-td-when" title="${escapeHtml(adminDateTime(r.at))}">${escapeHtml(adminAgo(r.at))}</td>
+                <td><code class="admin-uid">${escapeHtml(r.user || '—')}</code></td>
+                <td><span aria-hidden="true">${ev.icon}</span> ${escapeHtml(ev.label)}</td>
+                <td>${escapeHtml(r.course || '—')}</td>
+                <td>${escapeHtml(adminCareerLabel(r.career))}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>`;
+}
+
+function adminFootHtml(s){
+  return `
+    <span class="admin-foot-ranges">
+      <span class="admin-foot-label">Rango:</span>
+      ${ADMIN_RANGES.map(r => `
+        <button type="button" class="admin-range-btn${r.days === s.days ? ' is-active' : ''}"
+                data-action="admin-range" data-days="${r.days}"
+                aria-pressed="${r.days === s.days ? 'true' : 'false'}">${r.label}</button>`).join('')}
+    </span>
+    <span class="exam-foot-actions">
+      <button type="button" class="ghost-btn" data-action="close-admin">Cerrar</button>
+      <button type="button" class="primary-btn" data-action="admin-retry">🔄 Actualizar</button>
+    </span>`;
+}
+
+/* --- Entradas al panel: la URL y el punto del pie --------------------------- */
+
+// `?admin=true` o `?mode=dashboard`. Se lee una sola vez, en el arranque.
+function adminRequestedByUrl(){
+  try{
+    const params = new URLSearchParams(window.location.search);
+    return params.get('admin') === 'true' || params.get('mode') === 'dashboard';
+  }catch(e){ return false; }
+}
+
+// Saca los parámetros del panel de la barra de direcciones sin recargar, para
+// que cerrar el panel signifique cerrarlo también al recargar o al compartir el
+// enlace por error.
+function clearAdminUrlParams(){
+  try{
+    const url = new URL(window.location.href);
+    if(!url.searchParams.has('admin') && !url.searchParams.has('mode')) return;
+    url.searchParams.delete('admin');
+    url.searchParams.delete('mode');
+    history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+  }catch(e){ /* sin History API: el panel se cierra igual */ }
+}
+
+/* --- Eventos ---------------------------------------------------------------- */
+
+if(adminOpenBtn){
+  adminOpenBtn.addEventListener('click', () => openAdminDashboard());
+}
+
+if(adminOverlayEl){
+  // Clic en el fondo: cierra, igual que el resto de los modales.
+  adminOverlayEl.addEventListener('click', ev => {
+    if(ev.target === adminOverlayEl) closeAdminDashboard();
+  });
+
+  // Un solo oyente para los botones del panel (cuerpo y pie se repintan enteros
+  // en cada estado, así que enganchar oyentes uno a uno se perdería).
+  adminOverlayEl.addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-action]');
+    if(!btn || !adminOverlayEl.contains(btn)) return;
+    const action = btn.dataset.action;
+
+    if(action === 'close-admin') closeAdminDashboard();
+    else if(action === 'admin-retry') loadAdminStats();
+    else if(action === 'admin-range'){
+      const days = Number(btn.dataset.days);
+      if(!adminState || adminState.days === days) return;
+      adminState.days = days;
+      loadAdminStats();
+    }
+  });
+
+  adminOverlayEl.addEventListener('submit', ev => {
+    const form = ev.target.closest('[data-action="admin-pin"]');
+    if(!form) return;
+    ev.preventDefault();
+    const input = form.querySelector('#admin-pin-input');
+    const pin = input ? input.value.trim() : '';
+    if(!adminState) return;
+    if(!pin){
+      adminState.error = 'Escribe el PIN para entrar.';
+      renderAdminDashboard();
+      return;
+    }
+    adminState.pin = pin;
+    loadAdminStats();
+  });
+}
 
 /* -------------------------------------------------------------------------
    9. RENDER GLOBAL Y EVENTOS
@@ -7425,13 +8242,25 @@ function boot(){
   renderAll();
   sessionReady = true;
 
+  // Se abrió la app. Una vez por visita (ver trackOnce): recargar la página no
+  // es una sesión nueva, cerrar la pestaña y volver sí.
+  trackOnce('sesion', 'session_start');
+
+  // La app se puede abrir directo en el panel de control con ?admin=true o
+  // ?mode=dashboard. El PIN se pide igual: la URL solo elige la puerta.
+  if(adminRequestedByUrl()) openAdminDashboard();
+
   // Primera visita en este navegador: no se asume carrera, se pregunta. La
   // sesión no se guarda todavía —hacerlo escribiría una carrera que el alumno
-  // no ha elegido—; se guarda cuando elija en la pantalla de selección.
+  // no ha elegido—; se guarda cuando elija en la pantalla de selección. El ramo
+  // de entrada no se cuenta todavía: es el del fichero por defecto, no uno que
+  // el alumno haya elegido.
   if(!careerChosen){
     openCareerSelector();
     return;
   }
+
+  trackCourseView(activeCourse);
   saveSession();
 }
 

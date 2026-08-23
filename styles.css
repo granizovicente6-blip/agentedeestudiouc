@@ -3980,3 +3980,335 @@ body.modal-open{overflow:hidden;}
   max-width:980px; margin:0 auto; padding:0 20px 50px;
   font-size:13px; color:var(--ink-soft);
 }
+
+/* =========================================================================
+   PANEL DE CONTROL INTERNO
+
+   La vista de administración (app.js, sección 8B). Comparte el esqueleto de los
+   demás modales (.test-overlay / .test-dialog) y por lo tanto también el bloque
+   de pantalla completa de más arriba, así que lo que queda por hacer aquí son
+   dos cosas: repintar en oscuro todo lo que ese esqueleto trae claro —cabecera,
+   pie, botones, spinner— y dibujar las piezas propias del tablero (tarjetas,
+   barras de porcentaje, minigráfico y tabla).
+
+   La paleta es la misma familia de la clase guiada (--focus-*), por la misma
+   razón: es la pantalla que se mira entera y por un rato. Las variables --adm-*
+   se declaran en el diálogo para no dejarlas sueltas por todo el bloque.
+
+   El bloque va después del de pantalla completa a propósito: `--modal-measure`
+   se declara allá en `.test-dialog`, y el tablero necesita una columna mucho más
+   ancha que un texto de lectura (son tarjetas en rejilla, no párrafos).
+   ========================================================================= */
+
+/* --- La entrada: el punto del pie ---
+   No es un botón que invite a apretarlo. Es un punto del mismo color que el
+   texto del pie, que solo se despinta al pasar por encima: quien administra el
+   sitio sabe que está ahí, y el resto lee un punto. */
+.site-footer{
+  display:flex; align-items:baseline; gap:6px;
+}
+.footer-admin-dot{
+  flex:none;
+  background:none; border:none; padding:0 4px;
+  font-family:'JetBrains Mono',monospace;
+  font-size:15px; line-height:1;
+  color:var(--line);
+  cursor:pointer;
+  opacity:.7;
+}
+.footer-admin-dot:hover{color:var(--gold); opacity:1;}
+.footer-admin-dot:focus-visible{outline:2px solid var(--blue); outline-offset:3px; color:var(--gold);}
+
+/* --- El entorno oscuro --- */
+.admin-overlay{
+  background:rgba(7,10,20,0.9);
+  backdrop-filter:blur(3px);
+}
+.admin-dialog{
+  --adm-bg:#101728;
+  --adm-panel:#18223b;
+  --adm-panel-soft:#1e2947;
+  --adm-line:#2c3859;
+  --adm-ink:#eef1f8;
+  --adm-soft:#a6b1cb;
+  --adm-dim:#7c88a4;
+  --adm-gold:#e5bb6a;
+  --adm-blue:#82a9ea;
+  --adm-green:#84c48f;
+  --adm-red:#e79680;
+
+  /* Un tablero no es un texto: la columna de lectura de los otros modales
+     (820px) dejaría las cuatro tarjetas en fila india. */
+  --modal-measure:1160px;
+
+  background:var(--adm-bg);
+  color:var(--adm-ink);
+  border:none;
+}
+
+/* --- Cabecera --- */
+.admin-head{
+  background:linear-gradient(180deg, #151e35, var(--adm-bg));
+  border-bottom:1px solid var(--adm-line);
+  padding-block:14px 12px;
+}
+.admin-head .test-eyebrow{color:var(--adm-gold);}
+.admin-head .test-counter{color:var(--adm-dim);}
+.admin-head .test-close{color:var(--adm-soft);}
+.admin-head .test-close:hover{color:var(--adm-red);}
+.admin-head .modal-back{
+  background:var(--adm-panel); border-color:var(--adm-line); color:var(--adm-soft);
+}
+.admin-head .modal-back:hover{
+  border-color:var(--adm-gold); color:var(--adm-gold); background:var(--adm-panel-soft);
+}
+.admin-title{
+  font-family:'Source Serif 4',serif;
+  font-weight:700; font-size:22px; line-height:1.2;
+  margin:10px 0 6px; color:var(--adm-ink);
+}
+
+.admin-body{padding-block:22px 32px;}
+
+/* Los botones compartidos con la app clara hay que repintarlos enteros: en el
+   fondo oscuro un `.ghost-btn` beige sobre azul marino se lee como un error. */
+.admin-dialog .primary-btn{
+  background:var(--adm-gold); border-color:var(--adm-gold); color:#101728; font-weight:600;
+}
+.admin-dialog .primary-btn:hover{background:#f0cd88; border-color:#f0cd88;}
+.admin-dialog .ghost-btn{
+  background:transparent; border-color:var(--adm-line); color:var(--adm-soft);
+}
+.admin-dialog .ghost-btn:hover{border-color:var(--adm-gold); color:var(--adm-gold);}
+.admin-dialog .primary-btn:focus-visible,
+.admin-dialog .ghost-btn:focus-visible{outline:2px solid var(--adm-gold); outline-offset:2px;}
+.admin-dialog .ai-spinner{border-color:var(--adm-line); border-top-color:var(--adm-gold);}
+.admin-dialog .practice-loading-text{color:var(--adm-soft);}
+.admin-dialog .ai-error{color:var(--adm-red); border-left-color:var(--adm-red);}
+
+/* --- La puerta: el PIN ---
+   Centrada y sin nada más en pantalla. Lo único que se puede hacer aquí es
+   escribir el PIN o volver, así que no hay por qué mostrar el resto. */
+.admin-gate, .admin-empty{
+  max-width:460px; margin:0 auto; padding:48px 0;
+  text-align:center;
+}
+.admin-empty{max-width:520px;}
+.admin-gate-icon{font-size:34px; margin:0 0 12px; line-height:1;}
+.admin-gate-title{
+  font-family:'Source Serif 4',serif;
+  font-weight:700; font-size:20px; margin:0 0 10px; color:var(--adm-ink);
+}
+.admin-gate-text{font-size:14px; line-height:1.6; color:var(--adm-soft); margin:0 0 20px;}
+.admin-gate-form{display:flex; gap:10px; justify-content:center; flex-wrap:wrap;}
+.admin-pin-input{
+  font-family:'JetBrains Mono',monospace;
+  font-size:16px; letter-spacing:.3em;
+  width:170px; padding:9px 14px; text-align:center;
+  background:var(--adm-panel);
+  border:1px solid var(--adm-line);
+  color:var(--adm-ink);
+}
+.admin-pin-input:focus{outline:2px solid var(--adm-gold); outline-offset:1px; border-color:var(--adm-gold);}
+.admin-gate-error{
+  font-size:13px; color:var(--adm-red); margin:16px 0 0;
+}
+.admin-gate-note{
+  font-size:12px; line-height:1.6; color:var(--adm-dim); margin:24px 0 0;
+}
+.admin-gate-note code, .admin-error code{
+  font-family:'JetBrains Mono',monospace; font-size:11.5px;
+  background:var(--adm-panel); border:1px solid var(--adm-line);
+  padding:1px 5px; color:var(--adm-gold);
+}
+.admin-error{max-width:560px; margin:0 auto; padding:40px 0;}
+.admin-error .eval-actions{justify-content:center;}
+
+/* --- Tarjetas de resumen ---
+   `auto-fit` con un mínimo de 210px: cuatro en un monitor, dos en una tablet y
+   una en el celular, sin escribir tres puntos de quiebre. */
+.admin-section{margin:0 0 26px;}
+.admin-cards{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(210px, 1fr));
+  gap:14px;
+  list-style:none; margin:0; padding:0;
+}
+.stat-card{
+  background:var(--adm-panel);
+  border:1px solid var(--adm-line);
+  border-top:3px solid var(--adm-gold);
+  padding:16px 18px 18px;
+}
+.stat-card-icon{font-size:20px; line-height:1; margin:0 0 8px;}
+.stat-card-value{
+  font-family:'Source Serif 4',serif;
+  font-weight:700; font-size:34px; line-height:1;
+  margin:0 0 6px; color:var(--adm-ink);
+  font-variant-numeric:tabular-nums;
+}
+.stat-card-label{
+  font-family:'JetBrains Mono',monospace;
+  font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--adm-gold); margin:0 0 8px; font-weight:500;
+}
+.stat-card-note{font-size:12px; line-height:1.55; color:var(--adm-dim); margin:0;}
+.stat-card-note b{color:var(--adm-soft);}
+
+/* --- Paneles ---
+   Los dos rankings van lado a lado mientras quepan; el resto ocupa el ancho. */
+.admin-columns{
+  display:grid;
+  grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+  gap:14px;
+  margin:0 0 14px;
+}
+.admin-panel{
+  background:var(--adm-panel);
+  border:1px solid var(--adm-line);
+  padding:18px 20px 20px;
+}
+.admin-panel-wide{margin:0 0 14px;}
+.admin-panel-title{
+  font-family:'Source Serif 4',serif;
+  font-weight:600; font-size:16px; margin:0 0 4px; color:var(--adm-ink);
+}
+.admin-panel-sub{
+  font-family:'JetBrains Mono',monospace;
+  font-size:10.5px; letter-spacing:.05em;
+  color:var(--adm-dim); margin:0 0 16px;
+}
+.admin-panel-empty{font-size:13px; color:var(--adm-dim); margin:0; line-height:1.6;}
+
+/* --- Barras de porcentaje ---
+   La misma pieza para ramos, herramientas y carreras: rótulo y cifra arriba, la
+   barra debajo y el detalle en letra chica. En vertical y no en una fila porque
+   los nombres de los ramos son largos ("Aplicaciones Mat. para Economía y
+   Negocios") y en una fila con la barra al lado no quedaría ninguno de los dos. */
+.admin-bars{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:14px;}
+.admin-bar-row{min-width:0;}
+.admin-bar-head{
+  display:flex; align-items:baseline; justify-content:space-between; gap:12px;
+  margin:0 0 6px;
+}
+.admin-bar-label{
+  font-size:13.5px; font-weight:500; color:var(--adm-ink);
+  display:flex; align-items:baseline; gap:8px; min-width:0;
+  overflow-wrap:anywhere;
+}
+.admin-rank{
+  font-family:'JetBrains Mono',monospace;
+  font-size:10.5px; color:var(--adm-dim);
+  flex:none; min-width:14px;
+}
+.admin-tool-icon{flex:none;}
+.admin-bar-value{
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px; color:var(--adm-gold); flex:none;
+  font-variant-numeric:tabular-nums;
+}
+.admin-bar-track{
+  height:8px; background:var(--adm-bg);
+  border:1px solid var(--adm-line);
+  overflow:hidden;
+}
+.admin-bar-fill{height:100%; background:var(--adm-soft); transition:width .3s ease;}
+.admin-bar-fill.is-blue{background:var(--adm-blue);}
+.admin-bar-fill.is-gold{background:var(--adm-gold);}
+.admin-bar-fill.is-green{background:var(--adm-green);}
+@media (prefers-reduced-motion:reduce){ .admin-bar-fill{transition:none;} }
+.admin-bar-meta{
+  font-size:11.5px; color:var(--adm-dim); margin:5px 0 0;
+}
+
+/* --- Minigráfico de 14 días ---
+   Catorce columnas de altura proporcional. `align-items:flex-end` es lo que las
+   hace crecer desde abajo; sin eso las barras cuelgan del techo. */
+.admin-chart{
+  display:flex; align-items:flex-end; gap:6px;
+  height:120px;
+  padding:0 2px;
+}
+.admin-chart-col{
+  flex:1 1 0; min-width:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:flex-end;
+  height:100%;
+}
+.admin-chart-bar{
+  width:100%; background:var(--adm-blue);
+  min-height:2px;
+}
+/* Un día sin actividad no se borra: se deja su línea base para que el hueco se
+   vea como un hueco y no como un día que no existió. */
+.admin-chart-bar.is-empty{background:var(--adm-line);}
+.admin-chart-day{
+  font-family:'JetBrains Mono',monospace;
+  font-size:9.5px; color:var(--adm-dim);
+  margin-top:6px; white-space:nowrap;
+}
+
+/* --- Tabla de actividad reciente --- */
+.admin-table-wrap{overflow-x:auto;}
+.admin-table{
+  width:100%; border-collapse:collapse;
+  font-size:12.5px;
+}
+.admin-table th{
+  font-family:'JetBrains Mono',monospace;
+  font-size:10px; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--adm-gold); font-weight:500;
+  text-align:left; padding:0 12px 8px 0;
+  border-bottom:1px solid var(--adm-line);
+  white-space:nowrap;
+}
+.admin-table td{
+  padding:8px 12px 8px 0;
+  border-bottom:1px solid rgba(44,56,89,0.5);
+  color:var(--adm-soft);
+  vertical-align:top;
+}
+.admin-table tr:last-child td{border-bottom:none;}
+.admin-td-when{color:var(--adm-dim); white-space:nowrap;}
+.admin-uid{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; color:var(--adm-blue);
+}
+
+/* --- Pie: rango y actualizar --- */
+.admin-foot{
+  background:var(--adm-bg);
+  border-top:1px solid var(--adm-line);
+  flex-wrap:wrap;
+}
+.admin-foot-ranges{display:flex; align-items:center; gap:6px; flex-wrap:wrap;}
+.admin-foot-label{
+  font-family:'JetBrains Mono',monospace;
+  font-size:10.5px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--adm-dim); margin-right:2px;
+}
+.admin-range-btn{
+  font-family:'Inter',sans-serif;
+  font-size:12.5px; padding:6px 12px;
+  background:transparent;
+  border:1px solid var(--adm-line);
+  color:var(--adm-soft);
+  cursor:pointer;
+}
+.admin-range-btn:hover{border-color:var(--adm-gold); color:var(--adm-gold);}
+.admin-range-btn:focus-visible{outline:2px solid var(--adm-gold); outline-offset:2px;}
+.admin-range-btn.is-active{
+  background:var(--adm-panel-soft); border-color:var(--adm-gold); color:var(--adm-gold);
+  font-weight:600;
+}
+
+@media (max-width:560px){
+  .admin-title{font-size:19px;}
+  .stat-card-value{font-size:28px;}
+  .admin-chart{height:96px; gap:4px;}
+  /* Catorce etiquetas de día no caben en un celular: la barra sigue contando la
+     historia y el detalle exacto está en el `title` de cada columna. */
+  .admin-chart-day{display:none;}
+  .admin-foot{gap:12px;}
+  .admin-foot .exam-foot-actions{display:flex; gap:8px; width:100%;}
+  .admin-foot .exam-foot-actions > *{flex:1;}
+}

@@ -4,5 +4,24 @@ name = "agentedestudio"
 main = "worker.js"
 compatibility_date = "2026-08-05"
 
-# La API key NO va aquí. Se guarda como secreto cifrado con:
+# Ni la API key ni el PIN del panel van aquí. Se guardan como secretos cifrados:
 #   wrangler secret put ANTHROPIC_API_KEY
+#   wrangler secret put ADMIN_PIN
+
+# Base de uso del panel de administración (eventos anónimos). Es una D1, el
+# SQLite gratuito de Cloudflare, y vive en la misma cuenta que el Worker: el
+# navegador nunca habla con un tercero.
+#
+# Se crea una sola vez con:
+#   wrangler d1 create agentedestudio-uso
+#
+# Ese comando imprime el database_id real: pégalo abajo reemplazando el
+# marcador. Las tablas las crea el propio Worker en la primera petición
+# (ver TELEMETRY_SCHEMA en worker.js), así que no hay migración que correr.
+#
+# Sin esta sección el Worker sigue funcionando igual: la telemetría responde
+# 503 y el navegador la ignora en silencio.
+[[d1_databases]]
+binding = "DB"
+database_name = "agentedestudio-uso"
+database_id = "PEGA-AQUI-EL-ID-QUE-IMPRIME-WRANGLER-D1-CREATE"

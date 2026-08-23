@@ -708,15 +708,52 @@
   </div>
 </div>
 
+<!-- Panel de control interno (lo arma app.js, sección 8B). No es una herramienta
+     del alumno: se abre con ?admin=true (o ?mode=dashboard) en la URL, o con el
+     punto discreto del pie, y en los dos casos pide el PIN que el Worker guarda
+     como secreto. El cuerpo se reemplaza entero según el estado (puerta / cargando
+     / métricas / error) y el pie solo aparece cuando hay métricas que filtrar. -->
+<div class="test-overlay admin-overlay" id="admin-overlay" hidden>
+  <div class="test-dialog admin-dialog" id="admin-dashboard-modal" role="dialog" aria-modal="true"
+       aria-labelledby="admin-title">
+    <div class="test-head admin-head">
+      <div class="test-head-row">
+        <button type="button" class="modal-back" data-action="close-admin"
+                aria-label="Volver a la aplicación">
+          <span class="modal-back-arrow" aria-hidden="true">←</span>
+          <span class="modal-back-text">Volver a la aplicación</span>
+        </button>
+        <p class="test-eyebrow">Panel de control</p>
+        <button type="button" class="test-close" data-action="close-admin"
+                aria-label="Cerrar el panel y volver">×</button>
+      </div>
+      <h2 class="admin-title" id="admin-title">Uso del agente de estudio</h2>
+      <p class="test-counter" id="admin-subtitle">Métricas anónimas de uso del agente de estudio.</p>
+    </div>
+
+    <div class="test-body admin-body" id="admin-body" aria-live="polite"></div>
+
+    <div class="test-foot admin-foot" id="admin-foot" hidden></div>
+  </div>
+</div>
+
 <!-- Avisos breves de la aplicación. Vive fuera de todo modal y por encima de
      ellos (los overlays van en z-index:50), porque el aviso más importante que
      tiene que dar —"la lección quedó marcada"— aparece justo cuando el modal se
      está cerrando. Lo llena showToast() en app.js. -->
 <div class="toast-stack" id="toast-stack" role="status" aria-live="polite"></div>
 
-<!-- El pie nombra la carrera activa: lo reescribe applyCareerChrome(). -->
-<footer class="site-footer" id="app-footer">
-  Agente de estudio · Ingeniería Comercial UC — herramienta de planificación para el curso. Tus archivos se leen en tu propio navegador; solo el texto de las preguntas se envía para el análisis del temario con Claude IA.
+<!-- El pie nombra la carrera activa: applyCareerChrome() reescribe el <span>, no
+     el <footer>, porque a su lado vive la entrada al panel de control y escribir
+     sobre el pie entero se la llevaría por delante en cada cambio de carrera.
+
+     El punto es deliberadamente discreto: el panel es una vista interna, no una
+     herramienta del alumno, y anunciarlo con un botón solo invitaría a probar
+     PINes. Quien lo administra llega igual por ?admin=true. -->
+<footer class="site-footer">
+  <span id="app-footer">Agente de estudio · Ingeniería Comercial UC — herramienta de planificación para el curso. Tus archivos se leen en tu propio navegador; solo el texto de las preguntas se envía para el análisis del temario con Claude IA.</span>
+  <button type="button" class="footer-admin-dot" id="admin-open-btn"
+          title="Panel de control interno" aria-label="Abrir el panel de control interno (pide PIN)">·</button>
 </footer>
 
 <script src="app.js"></script>

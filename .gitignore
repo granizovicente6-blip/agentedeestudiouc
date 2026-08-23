@@ -1,3 +1,8 @@
 # Caché local de wrangler. Guarda el id y el correo de la cuenta de Cloudflare,
 # y este repositorio es público: no tiene por qué viajar en el historial.
 .wrangler/
+
+# Variables locales de `wrangler dev` (ANTHROPIC_API_KEY, ADMIN_PIN). En
+# producción son secretos cifrados del Worker, nunca archivos del repositorio.
+worker/.dev.vars
+.dev.vars

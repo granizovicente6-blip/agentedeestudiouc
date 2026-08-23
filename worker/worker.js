@@ -683,20 +683,24 @@ function fail(message, status, origin){
 
 /* --- Límite de solicitudes por IP ----------------------------------------- */
 
-async function withinRateLimit(request){
-  if(RATE_LIMIT.requests <= 0) return true;
+// Cada familia de rutas lleva su propia cuenta: la de la IA es un tope de gasto
+// (12/min), las de telemetría y del panel son topes de abuso y no tienen por qué
+// robarle cupo a un alumno que está analizando su temario. El `bucket` es lo que
+// las separa dentro de la misma Cache API.
+async function withinRateLimit(request, limit = RATE_LIMIT, bucket = 'ia'){
+  if(limit.requests <= 0) return true;
   const ip = request.headers.get('CF-Connecting-IP') || 'sin-ip';
-  const window = Math.floor(Date.now() / (RATE_LIMIT.windowSeconds * 1000));
-  const key = new Request(`https://rate-limit.invalid/${encodeURIComponent(ip)}/${window}`);
+  const window = Math.floor(Date.now() / (limit.windowSeconds * 1000));
+  const key = new Request(`https://rate-limit.invalid/${bucket}/${encodeURIComponent(ip)}/${window}`);
   const cache = caches.default;
 
   let count = 0;
   const hit = await cache.match(key);
   if(hit) count = Number(await hit.text()) || 0;
-  if(count >= RATE_LIMIT.requests) return false;
+  if(count >= limit.requests) return false;
 
   await cache.put(key, new Response(String(count + 1), {
-    headers: { 'Cache-Control': `max-age=${RATE_LIMIT.windowSeconds}` }
+    headers: { 'Cache-Control': `max-age=${limit.windowSeconds}` }
   }));
   return true;
 }
@@ -2153,6 +2157,284 @@ function normalizeGuidePauta(parsed, ejercicios){
   return pauta;
 }
 
+/* --- Telemetría de uso (Cloudflare D1) --------------------------------------
+   El panel de administración necesita saber cuánta gente usa el agente y con
+   qué herramientas, sin saber quiénes son. Lo que se guarda por evento es el
+   mínimo para responder esas dos preguntas: un identificador anónimo que el
+   navegador se inventa solo, el tipo de evento, la carrera y el ramo. Nada de
+   texto del alumno, ni de sus evaluaciones, ni IPs.
+
+   El almacén es D1 (el SQLite gratuito de Cloudflare) por dos razones: ya está
+   dentro de este Worker —así que el navegador no habla con un tercero ni carga
+   credenciales de nadie— y las métricas del panel son agregaciones (contar
+   distintos, agrupar por ramo) que en SQL son una línea y en un KV serían una
+   lectura completa de todo el historial.
+
+   Dos tablas y no una: `events` es el registro crudo, que se poda a los
+   TELEMETRY_RETENTION_DAYS días, y `users` es el censo de visitantes, que no se
+   poda nunca. Sin la segunda, podar el historial también borraría gente del
+   conteo de "visitantes únicos totales", que es justo la métrica que no debería
+   bajar nunca.
+   -------------------------------------------------------------------------- */
+
+// Tipos de evento aceptados. La lista es cerrada a propósito: es lo que el panel
+// sabe nombrar, y sin ella cualquiera podría llenar la tabla de basura.
+const TELEMETRY_EVENTS = new Set([
+  'session_start',     // el alumno abrió la app
+  'course_viewed',     // se paró en un ramo (una vez por ramo y visita)
+  'course_analyzed',   // pidió el análisis del temario de un ramo
+  'class_started',     // abrió una clase guiada
+  'practice_used',     // abrió la práctica de un tema
+  'flashcard_used',    // abrió el mazo de flashcards de un tema
+  'guide_generated',   // abrió la guía de estudio imprimible
+  'exam_simulated',    // abrió el simulacro de prueba
+  'topic_mastered'     // dio un tema por dominado
+]);
+
+const MAX_TELEMETRY_BATCH       = 25;    // eventos por envío
+const MAX_TELEMETRY_BODY_BYTES  = 8000;
+const MAX_TELEMETRY_FIELD_CHARS = 120;   // largo de carrera y ramo
+const TELEMETRY_RETENTION_DAYS  = 180;   // el registro crudo se poda a los 6 meses
+const ADMIN_RECENT_LIMIT        = 60;    // filas de la tabla de actividad reciente
+
+// Topes propios. El de la IA (12/min) es un tope de gasto; estos son de abuso:
+// escribir un evento no cuesta dinero, pero llenar la tabla sí molesta.
+const TELEMETRY_RATE_LIMIT = { requests: 40, windowSeconds: 60 };
+// El del panel es apretado a propósito: es el único freno contra probar PINes.
+const ADMIN_RATE_LIMIT     = { requests: 10, windowSeconds: 60 };
+
+const TELEMETRY_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS events (
+     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+     user_id    TEXT    NOT NULL,
+     event_type TEXT    NOT NULL,
+     career     TEXT,
+     course_id  TEXT,
+     created_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_events_type    ON events(event_type, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_events_course  ON events(course_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS users (
+     user_id    TEXT    PRIMARY KEY,
+     career     TEXT,
+     first_seen INTEGER NOT NULL,
+     last_seen  INTEGER NOT NULL,
+     events     INTEGER NOT NULL DEFAULT 0
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_users_last_seen ON users(last_seen)`
+];
+
+// Las tablas se crean solas en la primera petición de cada isolate. La bandera
+// evita repetir seis `CREATE TABLE IF NOT EXISTS` en cada evento: son baratos,
+// pero son otro viaje a la base por request.
+let telemetrySchemaReady = false;
+async function ensureTelemetrySchema(db){
+  if(telemetrySchemaReady) return;
+  await db.batch(TELEMETRY_SCHEMA.map(sql => db.prepare(sql)));
+  telemetrySchemaReady = true;
+}
+
+// El id anónimo lo genera el navegador (crypto.randomUUID). Se acepta cualquier
+// cosa con pinta de UUID y se rechaza el resto: la columna es la clave del censo
+// de visitantes y no puede recibir texto arbitrario.
+function cleanUserId(value){
+  const id = String(value || '').trim().toLowerCase();
+  return /^[a-f0-9-]{16,64}$/.test(id) ? id : '';
+}
+
+// Carrera y ramo son etiquetas para agrupar, no texto libre: se recortan y se
+// les saca cualquier salto de línea. Vacío se guarda como NULL.
+function cleanLabel(value){
+  const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, MAX_TELEMETRY_FIELD_CHARS) : null;
+}
+
+/* Recibe un lote de eventos y los guarda. El navegador manda en lotes (y en el
+   cierre de la pestaña, con sendBeacon) para no gastar una escritura por clic.
+
+   Cuerpo: { userId, events: [{ type, career, course, ts }] }
+
+   La marca de tiempo del cliente se acepta solo si es creíble —dentro de las
+   últimas 24 horas y no en el futuro—; si no, manda la hora del servidor. Un
+   reloj mal puesto no puede mover un evento a 2031 y romper todos los rangos
+   del panel. */
+async function handleTelemetry(request, env, origin, payload){
+  if(!env.DB){
+    // No es un error del alumno ni algo que deba reintentar: el sitio funciona
+    // igual sin telemetría. El frontend se traga esta respuesta en silencio.
+    return json({ ok: false, stored: 0, reason: 'telemetria-no-configurada' }, 503, origin);
+  }
+
+  const userId = cleanUserId(payload.userId);
+  if(!userId) return fail('Identificador anónimo inválido.', 400, origin);
+
+  const list = Array.isArray(payload.events) ? payload.events.slice(0, MAX_TELEMETRY_BATCH) : [];
+  const now = Date.now();
+  const floor = now - 24 * 60 * 60 * 1000;
+
+  const rows = [];
+  for(const raw of list){
+    if(!raw || typeof raw !== 'object') continue;
+    const type = String(raw.type || '').trim();
+    if(!TELEMETRY_EVENTS.has(type)) continue;
+
+    const ts = Number(raw.ts);
+    const createdAt = (Number.isFinite(ts) && ts > floor && ts <= now) ? Math.round(ts) : now;
+
+    rows.push({
+      type,
+      career: cleanLabel(raw.career),
+      course: cleanLabel(raw.course),
+      createdAt
+    });
+  }
+  if(!rows.length) return json({ ok: true, stored: 0 }, 200, origin);
+
+  await ensureTelemetrySchema(env.DB);
+
+  const insert = env.DB.prepare(
+    'INSERT INTO events (user_id, event_type, career, course_id, created_at) VALUES (?, ?, ?, ?, ?)'
+  );
+  const statements = rows.map(r => insert.bind(userId, r.type, r.career, r.course, r.createdAt));
+
+  // El censo de visitantes se mantiene aparte del registro crudo (ver arriba).
+  // `first_seen` se conserva con MIN para que un lote que llega tarde no adelante
+  // la fecha de la primera visita.
+  const last = rows.reduce((max, r) => Math.max(max, r.createdAt), 0);
+  const career = rows.map(r => r.career).find(Boolean) || null;
+  statements.push(env.DB.prepare(
+    `INSERT INTO users (user_id, career, first_seen, last_seen, events)
+     VALUES (?1, ?2, ?3, ?3, ?4)
+     ON CONFLICT(user_id) DO UPDATE SET
+       career     = COALESCE(?2, users.career),
+       first_seen = MIN(users.first_seen, ?3),
+       last_seen  = MAX(users.last_seen, ?3),
+       events     = users.events + ?4`
+  ).bind(userId, career, last, rows.length));
+
+  await env.DB.batch(statements);
+
+  // Poda perezosa del registro crudo: una de cada cien escrituras. No hay cron
+  // en el plan gratuito, y hacerlo en cada evento sería un DELETE por clic.
+  if(Math.random() < 0.01){
+    const cutoff = now - TELEMETRY_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    try{
+      await env.DB.prepare('DELETE FROM events WHERE created_at < ?').bind(cutoff).run();
+    }catch(e){ console.error('No se pudo podar el historial de telemetría:', e && e.message); }
+  }
+
+  return json({ ok: true, stored: rows.length }, 200, origin);
+}
+
+// Comparación de PIN que no se corta en la primera letra distinta. El PIN es
+// corto y el endpoint ya está limitado por IP, así que esto es más higiene que
+// defensa, pero cuesta cuatro líneas.
+function pinMatches(given, expected){
+  const a = String(given || '');
+  const b = String(expected || '');
+  if(!b || a.length !== b.length) return false;
+  let diff = 0;
+  for(let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/* Métricas del panel de administración. Devuelve todo lo que la vista muestra en
+   una sola respuesta: no tiene sentido pagar seis viajes de red para pintar seis
+   tarjetas que se leen juntas.
+
+   Cuerpo: { pin, days }  ·  `days` en 0 (todo), 7, 30 o 90.
+
+   Los conteos de visitantes salen del censo (`users`) y por eso son de siempre,
+   aunque el rango sea de 7 días; lo que el rango filtra es la actividad: los
+   ramos, las herramientas y la tabla de eventos. El panel etiqueta los dos
+   números como lo que son. */
+async function handleAdminStats(request, env, origin, payload){
+  if(!env.ADMIN_PIN){
+    return fail('El panel no está configurado: falta el secreto ADMIN_PIN en el Worker ' +
+                '(wrangler secret put ADMIN_PIN).', 503, origin);
+  }
+  if(!env.DB){
+    return fail('El panel no está configurado: falta la base de datos D1 (binding DB).', 503, origin);
+  }
+  if(!pinMatches(payload.pin, env.ADMIN_PIN)){
+    return fail('PIN incorrecto.', 401, origin);
+  }
+
+  await ensureTelemetrySchema(env.DB);
+
+  const now = Date.now();
+  const day = 24 * 60 * 60 * 1000;
+  const allowedDays = [0, 7, 30, 90];
+  const days = allowedDays.includes(Number(payload.days)) ? Number(payload.days) : 30;
+  // Rango "todo": un piso de 0 hace que la misma consulta sirva sin ramificar.
+  const since = days ? now - days * day : 0;
+
+  const q = (sql, ...args) => env.DB.prepare(sql).bind(...args);
+
+  const [
+    totals, active7, active30, newUsers, rangeEvents, courses, tools, careers, daily, recent
+  ] = await env.DB.batch([
+    q('SELECT COUNT(*) AS users, MIN(first_seen) AS since FROM users'),
+    q('SELECT COUNT(*) AS n FROM users WHERE last_seen >= ?', now - 7 * day),
+    q('SELECT COUNT(*) AS n FROM users WHERE last_seen >= ?', now - 30 * day),
+    q('SELECT COUNT(*) AS n FROM users WHERE first_seen >= ?', since),
+    q('SELECT COUNT(*) AS n FROM events WHERE created_at >= ?', since),
+    q(`SELECT course_id AS course, career,
+              COUNT(*) AS events, COUNT(DISTINCT user_id) AS users, MAX(created_at) AS last
+       FROM events
+       WHERE course_id IS NOT NULL AND created_at >= ?
+       GROUP BY course_id, career
+       ORDER BY events DESC
+       LIMIT 12`, since),
+    q(`SELECT event_type AS type, COUNT(*) AS events, COUNT(DISTINCT user_id) AS users
+       FROM events WHERE created_at >= ?
+       GROUP BY event_type`, since),
+    q(`SELECT career, COUNT(*) AS events, COUNT(DISTINCT user_id) AS users
+       FROM events WHERE career IS NOT NULL AND created_at >= ?
+       GROUP BY career ORDER BY events DESC`, since),
+    // Serie de los últimos 14 días para el minigráfico de actividad. Se agrupa
+    // por fecha UTC: el panel lo dice en su leyenda.
+    q(`SELECT date(created_at / 1000, 'unixepoch') AS day,
+              COUNT(*) AS events, COUNT(DISTINCT user_id) AS users
+       FROM events WHERE created_at >= ?
+       GROUP BY day ORDER BY day`, now - 13 * day),
+    q(`SELECT user_id, event_type AS type, career, course_id AS course, created_at
+       FROM events ORDER BY id DESC LIMIT ?`, ADMIN_RECENT_LIMIT)
+  ]);
+
+  const first = r => (r && r.results && r.results[0]) || {};
+  const rowsOf = r => (r && r.results) || [];
+
+  return json({
+    ok: true,
+    generatedAt: now,
+    days,
+    users: {
+      total: first(totals).users || 0,
+      since: first(totals).since || null,
+      active7: first(active7).n || 0,
+      active30: first(active30).n || 0,
+      newInRange: first(newUsers).n || 0
+    },
+    events: { inRange: first(rangeEvents).n || 0 },
+    courses: rowsOf(courses),
+    tools: rowsOf(tools),
+    careers: rowsOf(careers),
+    daily: rowsOf(daily),
+    // El id completo no aporta nada en una tabla de actividad y sí identifica a
+    // un navegador entre visitas: se publica solo el prefijo, que alcanza para
+    // ver "estas tres filas son de la misma persona".
+    recent: rowsOf(recent).map(r => ({
+      user: String(r.user_id || '').slice(0, 8),
+      type: r.type,
+      career: r.career,
+      course: r.course,
+      at: r.created_at
+    }))
+  }, 200, origin);
+}
+
 /* --- Handler --------------------------------------------------------------- */
 
 export default {
@@ -2178,6 +2460,41 @@ export default {
       });
     }
 
+    // Telemetría y panel van antes que todo lo de Claude: no gastan API key, no
+    // comparten el tope de gasto de la IA y tienen que seguir funcionando aunque
+    // el secreto de Anthropic falte (o al revés: la app tiene que seguir
+    // funcionando aunque la telemetría no esté configurada).
+    const route = new URL(request.url).pathname.replace(/\/+$/, '');
+
+    if(route === '/api/telemetry' || route === '/api/admin/stats'){
+      const isAdmin = route === '/api/admin/stats';
+      const limit  = isAdmin ? ADMIN_RATE_LIMIT : TELEMETRY_RATE_LIMIT;
+      const bucket = isAdmin ? 'admin' : 'telemetria';
+      if(!(await withinRateLimit(request, limit, bucket))){
+        return fail('Demasiadas solicitudes en poco tiempo. Espera un minuto y vuelve a intentarlo.', 429, origin);
+      }
+
+      const raw = await request.text();
+      if(raw.length > MAX_TELEMETRY_BODY_BYTES){
+        return fail('La solicitud es demasiado grande.', 413, origin);
+      }
+      let body;
+      try{ body = JSON.parse(raw); }
+      catch(e){ return fail('La solicitud no tiene el formato esperado.', 400, origin); }
+      if(!body || typeof body !== 'object'){
+        return fail('La solicitud no tiene el formato esperado.', 400, origin);
+      }
+
+      try{
+        return isAdmin
+          ? await handleAdminStats(request, env, origin, body)
+          : await handleTelemetry(request, env, origin, body);
+      }catch(err){
+        console.error(`Error en ${route}:`, err && err.message);
+        return fail('No se pudo completar la operación sobre la base de uso.', 500, origin);
+      }
+    }
+
     if(!env.ANTHROPIC_API_KEY){
       console.error('Falta el secreto ANTHROPIC_API_KEY (wrangler secret put ANTHROPIC_API_KEY).');
       return fail('El servicio de análisis no está configurado. Avisa a quien administra el sitio.', 500, origin);
@@ -2187,9 +2504,10 @@ export default {
       return fail('Demasiadas solicitudes en poco tiempo. Espera un minuto y vuelve a intentarlo.', 429, origin);
     }
 
-    // La ruta se lee antes que el cuerpo: la guía de estudio tiene su propio tope
-    // (ver MAX_GUIDE_BODY_BYTES) y el resto de los modos comparten el estrecho.
-    const path = new URL(request.url).pathname.replace(/\/+$/, '');
+    // La ruta ya se leyó arriba (`route`, para desviar telemetría y panel). Lo que
+    // se decide aquí es el tope del cuerpo: la guía de estudio tiene el suyo (ver
+    // MAX_GUIDE_BODY_BYTES) y el resto de los modos comparten el estrecho.
+    const path = route;
     const bodyLimit = path === '/api/generate-study-guide' ? MAX_GUIDE_BODY_BYTES : MAX_BODY_BYTES;
 
     const rawBody = await request.text();
