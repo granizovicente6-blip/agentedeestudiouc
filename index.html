@@ -540,7 +540,9 @@
 
     <div class="test-foot session-foot">
       <form class="session-form" id="study-session-form">
-        <textarea id="study-session-input" class="session-input" rows="2" maxlength="1500"
+        <!-- Un renglón de partida: la mayoría de las respuestas al profesor son
+             de una frase. app.js lo hace crecer con lo que se escriba. -->
+        <textarea id="study-session-input" class="session-input" rows="1" maxlength="1500"
                   placeholder="Escribe tu respuesta al profesor..."
                   aria-label="Tu respuesta al profesor"></textarea>
         <button type="submit" class="session-send" id="study-session-send">Responder</button>
@@ -564,8 +566,12 @@
           🎓 Completar todo el tema</button>
         <button type="button" class="session-ghost is-end"
                 data-action="finish-session">Concluir sesión</button>
-        <span class="session-note" id="study-session-note">Enter envía; Shift+Enter agrega una línea.
-        La clase vive solo mientras tengas la página abierta.</span>
+        <!-- Corto a propósito: comparte fila con los botones. El aviso completo
+             —que la clase no sobrevive al cierre— queda en el `title`, y de
+             todas formas salir ya pide confirmación. -->
+        <span class="session-note" id="study-session-note"
+              title="Enter envía; Shift+Enter agrega una línea. La clase vive solo mientras tengas la página abierta.">
+          Enter envía · Shift+Enter, nueva línea</span>
       </div>
     </div>
   </div>

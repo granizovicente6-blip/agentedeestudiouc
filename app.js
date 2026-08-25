@@ -8177,17 +8177,33 @@ function renderStudySession(){
     sessionInputEl.placeholder = s.phase === 1
       ? 'Escribe tu desarrollo del paso...'
       : 'Escribe tu respuesta al profesor...';
+    autoGrowSessionInput();
   }
   if(sessionSendBtn){
     sessionSendBtn.disabled = s.pending;
     sessionSendBtn.textContent = s.pending ? 'Enviando...' : 'Responder';
   }
+  // El botón nombra en corto la fase que viene —el título entero ("fase 2 ·
+  // ejercicio guiado") medía 249px y era él quien partía en dos la fila de
+  // botones— y deja la descripción larga en el tooltip.
+  //
+  // En el celular se acorta todavía más: ahí la fila mide 343px y con el nombre
+  // de la fase puesto no hay dos botones que quepan juntos, así que los cuatro
+  // caen en tres renglones. Sin él caben de a dos y el pie devuelve 41px a la
+  // pizarra, que en un teléfono es lo que ocupa un turno del profesor.
   if(sessionSkipBtn){
     const last = s.phase >= SESSION_PHASES.length - 1;
+    const next = last ? null : SESSION_PHASES[s.phase + 1];
+    const narrow = window.matchMedia('(max-width: 560px)').matches;
     sessionSkipBtn.disabled = s.pending || last;
     sessionSkipBtn.textContent = last
-      ? 'Última fase de la clase'
-      : `Saltar a la ${SESSION_PHASES[s.phase + 1].title.toLowerCase()} →`;
+      ? (narrow ? 'Última fase' : 'Última fase de la clase')
+      : narrow
+        ? `Saltar a fase ${s.phase + 2} →`
+        : `Saltar a la fase ${s.phase + 2}: ${next.label} →`;
+    sessionSkipBtn.title = last
+      ? 'Ya estás en la última fase de la clase.'
+      : `Saltar a la ${next.title.toLowerCase()}: ${next.hint}`;
   }
   // Los dos atajos, solo mientras el profesor no esté escribiendo: marcar en
   // medio de un turno cerraría el modal con una respuesta en camino.
@@ -8199,13 +8215,37 @@ function renderStudySession(){
     sessionPassLessonBtn.disabled = s.pending || s.isExtra;
     sessionPassLessonBtn.textContent = s.isExtra
       ? '✅ Programa del tema ya completo'
-      : `✅ Aprobar esta lección (sesión ${s.sessionIndex} de ${s.totalSessions})`;
+      : `✅ Aprobar lección (${s.sessionIndex} de ${s.totalSessions})`;
   }
   if(sessionPassTopicBtn){
     sessionPassTopicBtn.disabled = s.pending;
     // Con una sola sesión los dos botones harían lo mismo; el del tema sobra.
     sessionPassTopicBtn.hidden = s.totalSessions <= 1 && !s.isExtra;
   }
+}
+
+/* El campo de respuesta arranca en un renglón y crece con lo que se escriba: la
+   mayoría de las respuestas al profesor son de una frase, y reservarle dos
+   renglones fijos le quitaba 22px a la pizarra en cada turno. El tope lo pone el
+   `max-height` de styles.css; pasado eso el campo scrollea solo.
+
+   Al `scrollHeight` hay que sumarle los bordes: con `box-sizing:border-box` la
+   altura declarada los incluye, y sin ese ajuste el campo queda dos píxeles
+   corto y saca una barra de scroll apenas se llena el primer renglón. */
+function autoGrowSessionInput(){
+  if(!sessionInputEl) return;
+  // Con el campo vacío no hay nada que medir: se le suelta el alto y manda el
+  // `rows="1"`. Hay que hacerlo así porque Chrome cuenta el placeholder en el
+  // `scrollHeight`, y en un celular —donde "Escribe tu respuesta al profesor..."
+  // ocupa dos renglones— el campo se abría al doble de alto sin una sola letra
+  // escrita.
+  if(!sessionInputEl.value){
+    sessionInputEl.style.height = '';
+    return;
+  }
+  const borders = sessionInputEl.offsetHeight - sessionInputEl.clientHeight;
+  sessionInputEl.style.height = 'auto';
+  sessionInputEl.style.height = `${sessionInputEl.scrollHeight + borders}px`;
 }
 
 /* --- Eventos ---------------------------------------------------------------- */
@@ -8230,8 +8270,11 @@ if(sessionFormEl) sessionFormEl.addEventListener('submit', ev => {
   const text = sessionInputEl.value;
   if(!text.trim()) return;
   sessionInputEl.value = '';
+  autoGrowSessionInput();   // vaciarlo no dispara 'input': hay que encogerlo a mano
   runSessionTurn(text);
 });
+
+if(sessionInputEl) sessionInputEl.addEventListener('input', autoGrowSessionInput);
 
 // El campo es un textarea (las respuestas de un ejercicio son de varias líneas),
 // así que Enter tiene que enviar a mano: sin esto habría que ir al botón cada vez.

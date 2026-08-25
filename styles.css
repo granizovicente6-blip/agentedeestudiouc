@@ -576,8 +576,12 @@ main{max-width:980px; margin:0 auto; padding:36px 20px 80px;}
 /* Deslizador: el control cómodo en el teléfono. Se estiliza a mano porque el
    nativo desentona con el resto (y en móvil el pulgar por defecto es chico). */
 #target-grade-range{
-  flex:1;
-  min-width:120px;
+  flex:1 1 120px;
+  /* Sin `min-width:0` el deslizador se planta en su ancho mínimo y es el campo
+     numérico de al lado el que se sale de la caja (a 768px se salía 8px de la
+     ventana y sacaba barra de scroll horizontal en toda la página). Encogerse
+     es cosa suya: al lado tiene el número, que no se puede leer a medias. */
+  min-width:0;
   height:28px;                 /* área de toque, no grosor de la barra */
   margin:0;
   background:transparent;
@@ -616,7 +620,10 @@ main{max-width:980px; margin:0 auto; padding:36px 20px 80px;}
 
 #target-grade-input{
   width:84px;
-  flex:none;
+  /* Cede antes que desbordar, pero no baja de 64px: es un campo de nota con dos
+     dígitos y una coma, y más angosto que eso ya no se puede escribir en él. */
+  flex:0 1 auto;
+  min-width:64px;
   font-family:'Source Serif 4',serif;
   font-weight:700;
   /* 16px o más: bajo eso, Safari en iPhone hace zoom al enfocar el campo. */
@@ -671,8 +678,13 @@ main{max-width:980px; margin:0 auto; padding:36px 20px 80px;}
 .target-grade-note b{color:var(--ink); font-weight:600;}
 .target-grade-note:empty{display:none;}
 
-@media (max-width:720px){
-  .planner-head{padding:14px 16px;}
+/* Las dos columnas del planificador aguantan mientras cada una tenga sitio para
+   su control: el de la nota meta pide unos 220px entre el deslizador y el campo.
+   Con la barra lateral del catálogo puesta eso no pasa hasta cerca de los 860px
+   de ventana —a 768 la columna se quedaba en 196 y el campo de la nota se salía
+   de la pantalla—, así que por debajo de ahí las dos columnas van una sobre
+   otra, que es como ya se veían en el celular. */
+@media (max-width:860px){
   .planner-fields{grid-template-columns:1fr; gap:14px;}
   /* En una sola columna el separador vertical estorba: pasa a ser horizontal. */
   .planner-field + .planner-field{
@@ -680,6 +692,10 @@ main{max-width:980px; margin:0 auto; padding:36px 20px 80px;}
     border-left:none;
     border-top:1px dashed var(--line);
   }
+}
+
+@media (max-width:720px){
+  .planner-head{padding:14px 16px;}
   .exam-pills, .target-grade-controls{min-height:0;}
   .target-grade-goals{grid-template-columns:1fr;}
   .target-grade-scale{margin-right:98px;}
@@ -2654,14 +2670,22 @@ body.modal-open{overflow:hidden;}
 .session-done-list{margin:0; padding-left:20px; font-size:13.5px; line-height:1.7; color:var(--focus-soft);}
 .session-done-list b{color:var(--focus-ink);}
 
-/* --- Pie: la respuesta del alumno y las salidas --- */
+/* --- Pie: la respuesta del alumno y las salidas ---
+   El pie es lo que se usa dos veces por turno; la pizarra es lo que se mira
+   todo el rato. Con la cabecera ya en 131px, un pie de 169 era el bloque más
+   alto de la pantalla para escribir una frase. Ahora el campo arranca en un
+   renglón y crece con lo que se escriba, y los botones y la ayuda caben en una
+   sola fila. */
 .session-foot{
-  flex-direction:column; align-items:stretch; gap:10px;
-  padding:14px 22px 16px;
+  flex-direction:column; align-items:stretch; gap:8px;
+  padding:10px 22px 12px;
   background:#0c1220;
   border-top:1px solid var(--focus-line);
 }
-.session-form{display:flex; gap:10px; align-items:stretch;}
+/* `flex-end` y no `stretch`: cuando el campo crece a seis renglones el botón se
+   queda de su tamaño, pegado abajo, en vez de estirarse en una columna dorada
+   de 140px de alto. */
+.session-form{display:flex; gap:10px; align-items:flex-end;}
 .session-input{
   flex:1; min-width:0;
   font-family:'Inter',sans-serif;
@@ -2670,8 +2694,13 @@ body.modal-open{overflow:hidden;}
   border:1px solid var(--focus-line);
   background:var(--focus-panel);
   color:var(--focus-ink);
-  resize:vertical;
-  min-height:52px; max-height:180px;
+  /* Lo alto lo maneja app.js con el contenido, así que la agarradera de
+     redimensionar sobra: pelearía con el crecimiento automático. */
+  resize:none;
+  /* 46px es exactamente el renglón del `rows="1"` con su relleno: el campo en
+     reposo y el botón de enviar miden lo mismo. */
+  min-height:46px; max-height:140px;
+  overflow-y:auto;
 }
 .session-input::placeholder{color:var(--focus-soft); opacity:.7;}
 .session-input:focus-visible{outline:2px solid var(--focus-gold); outline-offset:1px;}
@@ -2684,6 +2713,9 @@ body.modal-open{overflow:hidden;}
   background:var(--focus-gold); color:#101728;
   cursor:pointer;
   flex:none;
+  /* El alto del campo en reposo: alineados abajo, los dos empiezan y terminan en
+     la misma línea mientras no haya nada escrito. */
+  min-height:46px;
 }
 .session-send:hover{background:#f0c979; border-color:#f0c979;}
 .session-send:focus-visible{outline:2px solid #fff; outline-offset:2px;}
@@ -2693,7 +2725,7 @@ body.modal-open{overflow:hidden;}
 .session-ghost{
   font-family:'Inter',sans-serif;
   font-size:12.5px;
-  padding:8px 14px;
+  padding:7px 12px;
   border:1px solid var(--focus-line);
   background:transparent; color:var(--focus-soft);
   cursor:pointer;
@@ -2711,7 +2743,7 @@ body.modal-open{overflow:hidden;}
 .session-pass{
   font-family:'Inter',sans-serif;
   font-size:12.5px; font-weight:600;
-  padding:8px 14px;
+  padding:7px 12px;
   border:1px solid var(--focus-green);
   background:var(--focus-green); color:#101728;
   cursor:pointer;
@@ -2729,8 +2761,14 @@ body.modal-open{overflow:hidden;}
 .session-pass.is-topic:hover{background:rgba(132,196,143,0.16); border-color:var(--focus-green);}
 .session-pass.is-topic[disabled]:hover{background:transparent;}
 
+/* La ayuda va al final de la fila de botones y ocupa lo que sobre: con
+   `flex-basis:0` nunca es ella la que empuja una segunda línea —crece hacia el
+   hueco que quede y se recorta si no alcanza—, y así el pie se queda en una
+   fila. El texto completo vive en su `title`. */
 .session-note{
-  flex:1; min-width:160px;
+  flex:1 1 0; min-width:0;
+  text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   font-size:11.5px; line-height:1.45; color:var(--focus-soft); opacity:.85;
   margin:0;
 }
@@ -2745,6 +2783,10 @@ body.modal-open{overflow:hidden;}
     row-gap:5px;
   }
   .session-head .session-program{justify-content:flex-start;}
+  /* Los cuatro botones ya se comen la fila: a la ayuda le quedaban 57px, que no
+     alcanzan ni para "Enter env...". Mejor no estar que estar recortada — el
+     atajo se sigue leyendo entero en el `title`. */
+  .session-note{display:none;}
 }
 
 @media (max-width:560px){
@@ -2772,7 +2814,8 @@ body.modal-open{overflow:hidden;}
   .session-bubble{font-size:14.5px; padding:12px 13px;}
   .session-foot{padding:10px 14px 12px;}
   .session-send{padding:11px 16px;}
-  .session-note{display:none;}   /* con el teclado abierto no cabe, y no es esencial */
+  /* La ayuda ya está oculta desde los 860px; con el teclado abierto tampoco
+     cabría. */
 }
 
 /* =========================================================================
