@@ -8113,10 +8113,19 @@ function renderStudySession(){
   if(!s || !sessionBodyEl) return;
   const phase = SESSION_PHASES[s.phase];
 
-  if(sessionTitleEl) sessionTitleEl.textContent = s.name;
+  // Las tres líneas de la cabecera van recortadas a una sola línea por CSS para
+  // no comerse la pizarra, así que el texto entero viaja en el `title`: el tema
+  // de nombre largo y la pista de la fase se siguen pudiendo leer con el cursor
+  // encima, en vez de perderse en los puntos suspensivos.
+  if(sessionTitleEl){
+    sessionTitleEl.textContent = s.name;
+    sessionTitleEl.title = s.name;
+  }
   if(sessionSubtitleEl){
-    sessionSubtitleEl.textContent = `${s.course} · ${s.type} · relevancia ${s.relevance.toLowerCase()} · ` +
+    const subtitle = `${s.course} · ${s.type} · relevancia ${s.relevance.toLowerCase()} · ` +
       `${phase.hint}`;
+    sessionSubtitleEl.textContent = subtitle;
+    sessionSubtitleEl.title = subtitle;
   }
 
   // El programa del tema: en qué clase de cuántas va y con qué nivel de
@@ -8127,11 +8136,12 @@ function renderStudySession(){
                 : s.sessionIndex <= 1 ? 'fundamentos y ejercicios de prueba de nivel base'
                 : s.sessionIndex >= s.totalSessions ? 'ejercicios avanzados, nivel examen'
                 : 'ejercicios intermedios de certamen';
+    const label = `🎓 ${s.isExtra
+      ? `Repaso extra · programa completo (${s.totalSessions} ${plural(s.totalSessions, 'sesión', 'sesiones')})`
+      : `Programa: sesión ${s.sessionIndex} de ${s.totalSessions}`} · ` +
+      `${Math.round(s.durationSec / 60)} min · ${nivel}`;
     sessionProgramEl.innerHTML = `
-      <span class="session-program-label">🎓 ${s.isExtra
-        ? `Repaso extra · programa completo (${s.totalSessions} ${plural(s.totalSessions, 'sesión', 'sesiones')})`
-        : `Programa: sesión ${s.sessionIndex} de ${s.totalSessions}`} ·
-        ${Math.round(s.durationSec / 60)} min · ${nivel}</span>
+      <span class="session-program-label" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
       ${sessionPillsHtml(s.totalSessions, done, s.sessionIndex, 'en curso')}`;
   }
   if(sessionModalEl){

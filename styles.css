@@ -2309,27 +2309,63 @@ body.modal-open{overflow:hidden;}
   color:var(--focus-ink);
 }
 
-/* --- Cabecera: tema, reloj y las tres fases --- */
+/* --- Cabecera: tema, reloj y las tres fases ---
+   La cabecera es un rótulo, no una pantalla: lo que se lee durante media hora
+   es la pizarra de abajo. Por eso se arma en rejilla y no apilando bloques —
+   así el título y los metadatos del programa comparten una sola fila en vez de
+   gastar dos— y por eso las separaciones las pone el `row-gap` y no los
+   márgenes de cada hijo: un solo número gobierna el alto de todo el bloque.
+
+   fila 1  ← volver | 🎓 clase guiada | reloj ⏸ ✕
+   fila 2  Título del tema                    Programa · min · nivel 🟢🔵⚪
+   fila 3  [1 Teoría] [2 Práctica] [3 Cierre]
+   fila 4  ramo · tipo · relevancia · qué toca ahora   (una línea, con tooltip) */
 .session-head{
   background:linear-gradient(180deg, #151e35, var(--focus-bg));
   border-bottom:1px solid var(--focus-line);
-  padding:14px 22px 12px;
+  padding:9px 22px 8px;
+  display:grid;
+  /* El título pide lo que mide y los metadatos se quedan con el resto: al revés
+     —con el título en `1fr`— la columna `auto` de la derecha reclamaba su ancho
+     completo y dejaba el nombre del tema cortado en tres palabras. Los dos
+     llevan `min-width:0` y recorte con puntos suspensivos, así que ninguno
+     puede desbordar la fila.
+
+     El suelo de 300px en la segunda columna es para el tema de nombre kilomé-
+     trico: sin él el título se queda con la fila entera y las píldoras del
+     programa —que son el estado de la clase, no un adorno— salen despedidas. */
+  grid-template-columns:auto minmax(min(300px, 38%), 1fr);
+  grid-template-areas:
+    "bar   bar"
+    "title meta"
+    "steps steps"
+    "sub   sub";
+  align-items:center;
+  column-gap:18px;
+  row-gap:6px;
 }
+.session-head .test-head-row{grid-area:bar;}
+.session-head .session-topic-title{grid-area:title;}
+.session-head .session-program{grid-area:meta;}
+.session-head .session-phases{grid-area:steps;}
+.session-head .session-subtitle{grid-area:sub;}
 .session-head .test-eyebrow{color:var(--focus-gold);}
 .session-head .test-close{color:var(--focus-soft);}
 .session-head .test-close:hover{color:var(--focus-red);}
 .session-head-tools{display:flex; align-items:center; gap:12px; flex:none;}
 
 /* El reloj es lo segundo que se mira después de la pregunta del profesor: va
-   grande, monoespaciado y con las cifras alineadas para que no salte al cambiar
-   de segundo. */
+   monoespaciado y con las cifras alineadas para que no salte al cambiar de
+   segundo. Antes iba a 27px, pero es él quien fija el alto de la fila entera:
+   a 20px sigue leyéndose de reojo desde el otro lado del escritorio y la barra
+   completa baja de 39 a 30 píxeles. */
 .session-timer{
   font-family:'JetBrains Mono',monospace;
-  font-size:27px; font-weight:500; line-height:1;
+  font-size:20px; font-weight:500; line-height:1;
   letter-spacing:.04em;
   font-variant-numeric:tabular-nums;
   color:var(--focus-gold);
-  padding:5px 12px;
+  padding:4px 10px;
   border:1px solid var(--focus-line);
   background:rgba(229,187,106,0.06);
 }
@@ -2350,7 +2386,7 @@ body.modal-open{overflow:hidden;}
 .session-timer-btn{
   font-family:'Inter',sans-serif;
   font-size:12px; line-height:1.2;
-  padding:7px 11px;
+  padding:6px 10px;
   border:1px solid var(--focus-line);
   background:transparent; color:var(--focus-soft);
   cursor:pointer;
@@ -2361,24 +2397,48 @@ body.modal-open{overflow:hidden;}
 .session-timer-btn[disabled]{opacity:.4; cursor:default;}
 .session-timer-btn[disabled]:hover{border-color:var(--focus-line); color:var(--focus-soft);}
 
+/* El título nombra el tema, no lo anuncia: a 19px sigue siendo lo más grande de
+   la cabecera —el reloj va a 20 pero en monoespaciado, que pesa menos— y ya no
+   compite con la pregunta del profesor, que es lo que hay que leer. Sin
+   márgenes: las separaciones las pone el `row-gap` de la rejilla. */
 .session-topic-title{
   font-family:'Source Serif 4',serif;
-  font-weight:600; font-size:22px; line-height:1.3;
-  margin:10px 0 12px; color:var(--focus-ink);
+  font-weight:600; font-size:19px; line-height:1.25;
+  margin:0; color:var(--focus-ink);
+  min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 
-/* El programa del tema, sobre los pasos de la clase: en qué sesión de cuántas
-   va, cuánto dura y qué nivel de ejercicios le toca. Las píldoras son las mismas
-   de la tarjeta del planificador, repintadas para el fondo oscuro. */
+/* El programa del tema, al costado del título: en qué sesión de cuántas va,
+   cuánto dura y qué nivel de ejercicios le toca. Las píldoras son las mismas de
+   la tarjeta del planificador, repintadas para el fondo oscuro.
+
+   Va en una sola línea y sin partirse (`nowrap`): son metadatos de referencia,
+   y dos líneas de metadatos al lado del título desequilibran la fila.
+
+   Cuando no cabe, el orden de sacrificio está escrito en los `flex-shrink`: el
+   texto cede cien veces más rápido que las píldoras, así que primero se recorta
+   la frase —el `title` que escribe app.js la dice entera— y solo con programas
+   de diez sesiones en un celular las píldoras se arrastran de lado. El estado
+   de la clase es lo último que se pierde. */
 .session-program{
-  display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px;
-  margin:0 0 12px;
+  display:flex; align-items:center; flex-wrap:nowrap; gap:0 10px;
+  margin:0; min-width:0; justify-content:flex-end;
 }
 .session-program-label{
   font-family:'JetBrains Mono',monospace;
-  font-size:11px; letter-spacing:.02em; line-height:1.4;
+  font-size:10.5px; letter-spacing:.02em; line-height:1.4;
   color:var(--focus-gold);
+  flex:0 100 auto; min-width:0;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
+.session-program .session-pills{
+  flex:0 1 auto; min-width:0;
+  flex-wrap:nowrap;
+  overflow-x:auto; scrollbar-width:none;
+}
+.session-program .session-pills::-webkit-scrollbar{display:none;}
+.session-program .session-pill{flex:none;}
 .session-program .session-pill{
   border-color:var(--focus-line);
   background:rgba(255,255,255,0.03);
@@ -2399,12 +2459,15 @@ body.modal-open{overflow:hidden;}
    que faltan apagados: se lee de un vistazo cuánto queda de sesión. */
 .session-phases{
   display:flex; align-items:stretch; gap:8px;
-  list-style:none; margin:0 0 10px; padding:0;
+  list-style:none; margin:0; padding:0;
 }
+/* Delgadas a propósito: son un indicador de en qué va la clase, no botones. El
+   alto lo fija el número, así que se recorta el relleno y se achica el círculo
+   en vez de tocar la tipografía, que a menos de 12px ya no se lee de reojo. */
 .session-phase{
-  display:flex; align-items:center; gap:8px;
+  display:flex; align-items:center; gap:7px;
   flex:1; min-width:0;
-  padding:7px 10px;
+  padding:4px 10px;
   border:1px solid var(--focus-line);
   background:rgba(255,255,255,0.02);
   color:var(--focus-soft);
@@ -2412,8 +2475,8 @@ body.modal-open{overflow:hidden;}
 }
 .session-phase-num{
   font-family:'JetBrains Mono',monospace;
-  font-size:11px;
-  width:20px; height:20px; flex:none;
+  font-size:10.5px;
+  width:18px; height:18px; flex:none;
   display:flex; align-items:center; justify-content:center;
   border:1px solid var(--focus-line);
   color:var(--focus-soft);
@@ -2438,7 +2501,16 @@ body.modal-open{overflow:hidden;}
 .session-phase.is-current.is-done .session-phase-num{
   border-color:var(--focus-gold); background:var(--focus-gold); color:#101728;
 }
-.session-subtitle{color:var(--focus-soft);}
+/* El pie de la cabecera —ramo, tipo, relevancia y qué toca en esta fase— es
+   contexto de una sola lectura: se mira al entrar y no se vuelve a mirar. Se
+   queda en una línea pase lo que pase; si el nombre del ramo es largo se
+   recorta y app.js deja el texto completo en el `title` para el que pase el
+   cursor. Dos líneas aquí valen 15 píxeles menos de pizarra en cada clase. */
+.session-subtitle{
+  color:var(--focus-soft);
+  font-size:10.5px; line-height:1.4;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
 
 /* --- El cuerpo: la pizarra --- */
 .session-body{
@@ -2663,27 +2735,37 @@ body.modal-open{overflow:hidden;}
   margin:0;
 }
 
+/* Título y metadatos comparten fila mientras quepan los dos. Por debajo de
+   860px el título se quedaría en tres palabras recortadas, así que la rejilla
+   vuelve a una sola columna y el programa baja a su propia línea. */
+@media (max-width:860px){
+  .session-head{
+    grid-template-columns:minmax(0, 1fr);
+    grid-template-areas:"bar" "title" "meta" "steps" "sub";
+    row-gap:5px;
+  }
+  .session-head .session-program{justify-content:flex-start;}
+}
+
 @media (max-width:560px){
   /* En el celular el modal ya ocupa la pantalla completa (.test-dialog): el alto
      fijo estorba, manda el 100% que hereda del esqueleto. */
   .session-dialog{height:100%; max-width:none;}
   .btn-session{width:100%; text-align:center;}
-  .session-head{padding:12px 14px 10px;}
+  .session-head{padding:8px 14px 8px; row-gap:5px;}
   .session-head-tools{gap:8px;}
-  .session-timer{font-size:21px; padding:4px 8px;}
-  .session-timer-btn{padding:6px 8px;}
-  .session-topic-title{font-size:18px; margin:8px 0 10px;}
-  .session-program{gap:5px 8px; margin-bottom:10px;}
-  .session-program-label{font-size:10.5px;}
-  /* La fila de píldoras se arrastra en una línea en vez de partirse en tres. */
-  .session-program .session-pills{flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none;}
-  .session-program .session-pills::-webkit-scrollbar{display:none;}
-  .session-program .session-pill{flex:none;}
+  .session-timer{font-size:18px; padding:3px 8px;}
+  .session-timer-btn{padding:5px 8px;}
+  .session-topic-title{font-size:16.5px;}
+  .session-program{gap:0 8px;}
+  .session-program-label{font-size:10px;}
+  /* La fila de píldoras se arrastra en una línea en vez de partirse en tres: eso
+     ya lo hace la regla de arriba en todos los tamaños. */
   /* Los nombres de las fases no caben en tres columnas: quedan los números y el
      de la fase en curso, que es el único que hay que saber. */
   .session-phase-name{display:none;}
   .session-phase.is-current .session-phase-name{display:inline;}
-  .session-phase{flex:none; padding:6px 8px;}
+  .session-phase{flex:none; padding:4px 8px;}
   .session-phase.is-current{flex:1;}
   .session-body{padding:14px; gap:13px; background-image:none;}
   .session-msg{max-width:96%;}
