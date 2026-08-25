@@ -161,6 +161,54 @@ npx wrangler d1 execute agentedestudio-uso --local --command "SELECT event_type,
 
 ---
 
+# Banco de pruebas de evaluación algebraica
+
+Vive en `worker/tests/` y responde a un problema concreto: el tutor daba por
+incorrecta una respuesta que estaba bien, solo porque no coincidía letra por
+letra con su pauta —el alumno simplificaba `(x^2 - 1)/(x - 1)` a `x + 1` y se lo
+rechazaban—, y se mantenía en su postura aunque el alumno insistiera.
+
+Los prompts que corrigen al alumno (clase guiada, chat por tema y pauta de la
+guía) llevan por eso dos bloques de reglas: **EQUIVALENCIA ALGEBRAICA Y
+NUMÉRICA**, que obliga a comprobar `(Expresión_Profesor) - (Expresión_Alumno)`
+antes de decir que algo está mal, y **CUANDO EL ALUMNO CUESTIONA TU CORRECCIÓN**,
+que obliga a rehacer el desarrollo del alumno sin sesgo de confirmación y a
+admitir el error de inmediato si lo tenía.
+
+## Qué se prueba sin gastar API key
+
+```bash
+node --test worker/tests/equivalencia.test.mjs
+```
+
+- `banco.mjs` es la lista de correcciones reales: a la izquierda lo que dice la
+  pauta, a la derecha lo que escribió el alumno. Cada par se verifica con
+  `equivalencia.mjs`, un evaluador numérico sin dependencias, así que las formas
+  que el prompt promete aceptar (`2/4`, `0.5`, `50%`, `2^-1`, `8.000.000`,
+  `ln(a*b) = ln a + ln b`) están comprobadas y no son una promesa escrita a mano.
+- Los mismos builders que usa el Worker arman los prompts de las tres rutas y se
+  comprueba que las reglas viajen dentro. Si alguien reescribe un bloque y se
+  lleva una regla por delante, la prueba avisa antes del despliegue.
+- También se comprueba que las exportaciones con nombre de `worker.js` sean todas
+  funciones: workerd rechaza el módulo de entrada si exporta una constante y el
+  Worker no arranca.
+
+## Qué se prueba contra el modelo (gasta API key)
+
+```bash
+node worker/tests/live.mjs --url https://agentedestudio.<cuenta>.workers.dev
+```
+
+Dos escenarios de clase guiada: el alumno responde con una expresión equivalente
+a la del profesor, y el alumno insiste después de que el tutor lo rechazó. El
+veredicto automático es por marcas de texto y puede equivocarse, así que imprime
+la respuesta completa del tutor: lo que decide es leerla.
+
+Sin `--url` apunta a `http://localhost:8787`, que necesita `wrangler dev` con
+`ANTHROPIC_API_KEY` en `worker/.dev.vars`.
+
+---
+
 ## Qué controla el Worker
 
 | Control | Valor por defecto | Dónde se cambia |

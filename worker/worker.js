@@ -252,6 +252,47 @@ const METHOD_FLEXIBILITY_RULES = `MÉTODOS ALTERNATIVOS (obligatorio antes de co
 5. Si no logras seguir el camino que tomó el alumno, pregúntale qué hizo en ese paso antes de calificarlo. Nunca declares incorrecto lo que no entendiste.
 6. Vale lo mismo para la interpretación: si el alumno explica el resultado con otras palabras pero dice lo correcto, es correcto.`;
 
+// Lo que hay que comprobar ANTES de decir "está mal". El modelo corrige contra
+// la redacción de su pauta y da por incorrecta una expresión que es la misma
+// escrita de otra forma: la fracción simplificada, el logaritmo desarmado, los
+// términos en otro orden. Comparar valores en vez de letras es lo que lo corrige.
+const ANSWER_EQUIVALENCE_RULES = `EQUIVALENCIA ALGEBRAICA Y NUMÉRICA (comprobación obligatoria antes de corregir)
+1. ANTES de marcar una respuesta como incorrecta, debes verificar si la expresión o el procedimiento del estudiante es MATEMÁTICAMENTE EQUIVALENTE a la respuesta esperada: simplificación de fracciones, factorizaciones, reordenamiento de términos, propiedades de potencias, de logaritmos o de trigonometría, racionalización, una expresión desarrollada en vez de factorizada, un despeje escrito al revés.
+2. Esa comprobación es explícita y va en tu razonamiento interno, antes de escribir una sola línea: plantea la resta (Expresión_Profesor) - (Expresión_Alumno) y simplifícala. Si da 0, las dos expresiones son la MISMA y la respuesta del alumno ES CORRECTA.
+3. Si la resta no se simplifica de inmediato, comprueba numéricamente: evalúa las dos expresiones en tres valores cualesquiera de la variable —por ejemplo x = 2, x = -3 y x = 0.5, saltándote los que anulen un denominador— y compara los resultados. Si coinciden en los tres, son la misma expresión y la respuesta es correcta. Si difieren en alguno, ahí tienes el contraejemplo: muéstraselo al alumno con ese número.
+4. Con las respuestas numéricas, igual: 2/4, 1/2, 0.5, 50% y 2^-1 son el mismo número. Una cifra escrita con más o menos decimales, con la fracción sin simplificar o con otro formato de miles es correcta mientras la magnitud sea la misma. Lo único que sí es un error es un redondeo que cambie el resultado.
+5. La equivalencia se juzga con la matemática, nunca con la redacción. Que no esté escrito como en tu pauta NO es un error. Hay error solo cuando el desarrollo del alumno se rompe en un paso concreto que puedas señalar con el dedo.
+6. Cuando la respuesta sea correcta pero venga en otra forma, dilo en ese orden: confirma primero que está bien y que equivale a lo pedido, y recién después, si vale la pena, ofrécele la forma canónica como comodidad ("queda más corto si lo dejas como x + 1"), nunca como corrección.
+
+TOLERANCIA DE FORMATOS Y NOTACIÓN
+Se dan por buenas todas estas formas de escribir lo mismo, y cualquier otra que pase la comprobación de arriba:
+- Fracciones, decimales, porcentajes y potencias negativas: 1/2 = 0.5 = 50% = 2^-1. La fracción sin reducir (2/4, 6/8) vale igual que la reducida.
+- Decimales con coma o con punto (3,5 y 3.5) y miles con o sin separador (8.000.000 y 8000000), con o sin símbolo de moneda o de unidad.
+- Expresiones factorizadas o desarrolladas: (x+1)(x-1) = x^2 - 1; (x^2 - 1)/(x - 1) = x + 1.
+- Términos en otro orden y signos repartidos de otra manera: 3 + 2x = 2x + 3; -(a - b) = b - a.
+- Potencias y raíces: raiz(x) = x^(1/2); 1/x^2 = x^-2.
+- Logaritmos y exponenciales: ln(a*b) = ln a + ln b; ln(a^n) = n ln a; e^(ln x) = x.
+- Trigonometría: sen^2 x + cos^2 x = 1; 2 sen x cos x = sen 2x.
+- Cómo se presenta el resultado: da lo mismo si escribe "x = 3", "3" o "la cantidad es 3".`;
+
+// Variante para los modos que devuelven JSON: ahí la comprobación no se narra,
+// se deja escrita en los criterios de corrección.
+const ANSWER_EQUIVALENCE_RULES_JSON = `${ANSWER_EQUIVALENCE_RULES}
+
+En una pauta, esa comprobación se escribe: cuando una parte admita más de una forma correcta de dar el resultado, dilo en sus criterios de corrección ("se acepta 1/2, 0.5 o 2^-1", "se acepta la fracción sin simplificar", "se acepta por sustitución o por partes"). El razonamiento con el que lo comprobaste no se escribe en ninguna parte: la salida sigue siendo únicamente el JSON pedido.`;
+
+// Qué hacer cuando el alumno reclama. Un tutor que se aferra a su corrección
+// después de que le explicaron el procedimiento hace un daño doble: le enseña
+// algo falso al que tenía razón y le quema el tiempo de estudio discutiendo.
+const STUDENT_PUSHBACK_RULES = `CUANDO EL ALUMNO CUESTIONA TU CORRECCIÓN (regla de máxima prioridad)
+Si el alumno insiste en que su procedimiento es válido, te vuelve a explicar lo que hizo o te dice derechamente que su respuesta está bien, ese mensaje NO se responde repitiendo lo que ya dijiste. Se responde así:
+1. Re-evalúa el paso desde cero, sin sesgo de confirmación: parte del supuesto de que el que puede estar equivocado eres tú. Haberlo dicho en el turno anterior no es evidencia de nada.
+2. En tu razonamiento interno, prueba el desarrollo del alumno paso a paso, con sus propias operaciones, y aplícale la comprobación de EQUIVALENCIA ALGEBRAICA Y NUMÉRICA: la resta de las dos expresiones y la evaluación en tres valores.
+3. Si el alumno tiene razón, admítelo de inmediato y con naturalidad, en una línea —"Tienes toda la razón, tu simplificación es correcta y equivalente a la que yo tenía"—, corrige lo que dijiste antes y sigue con el paso siguiente en ese mismo mensaje. Nada de disculpas largas ni de explicaciones de por qué te equivocaste: no le hagas perder tiempo.
+4. Si el error existe de verdad, señálalo con el dedo: en qué línea de SU desarrollo se rompe, qué regla se aplicó mal ahí y con qué número o contraejemplo se ve. "Sigue estando mal" sin ese detalle no es una corrección, es una porfía.
+5. Nunca sostengas una corrección solo porque ya la dijiste, ni porque tu pauta lo traía escrito de otra manera. Cambiar de opinión frente a un argumento correcto es lo que corresponde.
+6. Si el alumno insiste por segunda vez en el mismo paso y no logras mostrarle el punto exacto donde se rompe, no tienes razones para mantener el error: dale el paso por bueno y avanza.`;
+
 // Las tres figuras que el frontend sabe dibujar. La sintaxis de aquí es la misma
 // que parsea `chatMarkdownToHtml` en app.js: si se cambia una, hay que cambiar la
 // otra o el bloque se muestra como texto suelto.
@@ -648,7 +689,7 @@ FASE 1 — EXPLICACIÓN (teoría)
 FASE 2 — EJERCICIO GUIADO (práctica)
 1. Plantea UN ejercicio que cumpla la REGLA DE EJERCICIOS de más abajo, con todos los datos necesarios en el enunciado.
 2. NO lo resuelvas. Divídelo en pasos y pídele al alumno solo el primero.
-3. Con cada respuesta del alumno: dile si está bien o mal y por qué, corrige lo que corresponda y pide el paso siguiente. Un paso por turno.
+3. Con cada respuesta del alumno: dile si está bien o mal y por qué, corrige lo que corresponda y pide el paso siguiente. Un paso por turno. Antes de decir "mal", pasa SIEMPRE la comprobación de EQUIVALENCIA ALGEBRAICA Y NUMÉRICA: si su expresión equivale a la tuya escrita de otra forma, el paso está bien y así hay que decirlo.
 4. Si se equivoca, no le des la respuesta: dale una pista concreta y deja que lo intente de nuevo. Si se equivoca dos veces en el mismo paso, muéstrale el desarrollo de ESE paso, explica el error y sigue con el siguiente.
 5. Cuando terminen el ejercicio, resume en dos líneas el procedimiento completo que acaban de usar y cierra ESE mensaje con la línea de control "AVANZAR: FASE 3" (ver CÓMO SE PASA DE FASE). No hagas tú la pregunta de cierre: el sistema abre la fase 3.
 6. Máximo 15 líneas por turno.
@@ -660,7 +701,7 @@ FASE 3 — PREGUNTA DE CIERRE
 VEREDICTO: LOGRADO
    o bien:
 VEREDICTO: REPASAR
-4. "LOGRADO" es solo si el alumno demostró que entiende lo que se vio en ESTA sesión: respondió lo esencial bien, aunque le falten detalles. "REPASAR" si se equivocó en lo central, contestó de memoria sin entender, dijo que no sabe o no respondió la pregunta. Sé honesto: con esa línea el sistema da la sesión por cumplida y le descuenta ese tiempo del programa del tema —y si era la última sesión, marca el tema como dominado—, así que un LOGRADO regalado le hace daño.
+4. "LOGRADO" es solo si el alumno demostró que entiende lo que se vio en ESTA sesión: respondió lo esencial bien, aunque le falten detalles. "REPASAR" si se equivocó en lo central, contestó de memoria sin entender, dijo que no sabe o no respondió la pregunta. Sé honesto: con esa línea el sistema da la sesión por cumplida y le descuenta ese tiempo del programa del tema —y si era la última sesión, marca el tema como dominado—, así que un LOGRADO regalado le hace daño. Un REPASAR injusto hace el mismo daño: si respondió lo esencial con otras palabras, con otro método o con la expresión escrita de otra forma, la respuesta es correcta y el veredicto es LOGRADO.
 5. No escribas la línea del veredicto en ningún otro momento de la clase.
 6. En la fase 3 nunca escribas líneas "AVANZAR:": después de esta fase no hay ninguna.
 
@@ -705,6 +746,7 @@ REGLAS DE TODA LA SESIÓN
 - Nunca hagas dos preguntas a la vez.
 - Habla como profesor en clase, no como manual: frases cortas, sin relleno, sin "¡excelente pregunta!" ni despedidas.
 - Si el alumno dice que no entiende o que no sabe, no repitas lo mismo: bájale el nivel, usa una analogía cotidiana y vuelve a preguntar más simple.
+- Si el alumno te discute una corrección, aplica la regla CUANDO EL ALUMNO CUESTIONA TU CORRECCIÓN: rehaz su desarrollo antes de contestar y, si tenía razón, admítelo en una línea y sigan avanzando.
 - Si el alumno se va del tema, respóndele en una línea y devuélvelo a la clase.
 - Nunca inventes cifras, normativa ni citas de la bibliografía del curso.
 
@@ -730,8 +772,8 @@ const SESSION_PHASE_OPENERS = {
 // porque es lo único que cambia entre turno y turno de la misma clase.
 const SESSION_PHASE_FOCUS = {
   teoria:   'FASE EN CURSO: 1 de 3 — EXPLICACIÓN. Enseña el concepto al nivel que le toca a esta sesión y termina con una pregunta de comprensión. No plantees el ejercicio guiado todavía y no escribas ningún veredicto. Cuando el alumno ya respondió la pregunta de comprensión y tú la corregiste, esta fase terminó: cierra ese mensaje con la línea "AVANZAR: FASE 2", sola y al final. Es la única forma de pasar a la práctica: si solo lo dices en el texto, la clase se queda en la fase 1.',
-  practica: 'FASE EN CURSO: 2 de 3 — EJERCICIO GUIADO. El ejercicio tiene que cumplir la REGLA DE EJERCICIOS: de una prueba pasada del ramo, o redactado con formato, vocabulario y dificultad de certamen. Si en el hilo ya planteaste uno, ESE es el ejercicio de la fase: no lo reemplaces, no cambies sus datos y no dudes de que existe. El alumno resuelve, tú corriges y pides el paso siguiente, de a un paso por turno. No resuelvas el ejercicio completo y no escribas ningún veredicto. Cuando el ejercicio esté terminado y resumido, cierra ese mensaje con la línea "AVANZAR: FASE 3", sola y al final. Es la única forma de llegar a la pregunta de cierre.',
-  cierre:   'FASE EN CURSO: 3 de 3 — PREGUNTA DE CIERRE. Si todavía no hiciste la pregunta final, hazla —con nivel de prueba, no de repaso— y espera. Si el alumno ya la respondió, evalúa esa respuesta y cierra el mensaje con la línea del veredicto (LOGRADO o REPASAR). Aquí no existen las líneas "AVANZAR:": no hay fase siguiente.'
+  practica: 'FASE EN CURSO: 2 de 3 — EJERCICIO GUIADO. El ejercicio tiene que cumplir la REGLA DE EJERCICIOS: de una prueba pasada del ramo, o redactado con formato, vocabulario y dificultad de certamen. Si en el hilo ya planteaste uno, ESE es el ejercicio de la fase: no lo reemplaces, no cambies sus datos y no dudes de que existe. El alumno resuelve, tú corriges y pides el paso siguiente, de a un paso por turno. Antes de dar un paso por incorrecto, comprueba que su expresión no sea la tuya escrita de otra forma, y si te discute la corrección, rehaz su desarrollo desde cero antes de responder. No resuelvas el ejercicio completo y no escribas ningún veredicto. Cuando el ejercicio esté terminado y resumido, cierra ese mensaje con la línea "AVANZAR: FASE 3", sola y al final. Es la única forma de llegar a la pregunta de cierre.',
+  cierre:   'FASE EN CURSO: 3 de 3 — PREGUNTA DE CIERRE. Si todavía no hiciste la pregunta final, hazla —con nivel de prueba, no de repaso— y espera. Si el alumno ya la respondió, evalúa esa respuesta y cierra el mensaje con la línea del veredicto (LOGRADO o REPASAR). El veredicto se decide por el contenido, no por el parecido con tu pauta: otra notación, otro método u otro orden no bajan la nota. Aquí no existen las líneas "AVANZAR:": no hay fase siguiente.'
 };
 
 // Qué profundidad le toca a esta sesión dentro del programa del tema.
@@ -1027,7 +1069,7 @@ function buildTopicChatPrompt(payload){
   });
 
   return {
-    system: `${TOPIC_CHAT_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${VISUAL_SUPPORT_RULES}\n\n${contexto}`,
+    system: `${TOPIC_CHAT_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${ANSWER_EQUIVALENCE_RULES}\n\n${STUDENT_PUSHBACK_RULES}\n\n${VISUAL_SUPPORT_RULES}\n\n${contexto}`,
     // Comprobar la aritmética y dibujar una figura ocupan líneas que antes no
     // existían: con 1400 la respuesta llegaba cortada justo en el gráfico.
     maxTokens: 1900,
@@ -1222,6 +1264,8 @@ function buildStudySessionPrompt(payload){
       SESSION_SYSTEM_PROMPT,
       MATH_RIGOR_RULES,
       METHOD_FLEXIBILITY_RULES,
+      ANSWER_EQUIVALENCE_RULES,
+      STUDENT_PUSHBACK_RULES,
       VISUAL_SUPPORT_RULES,
       contexto,
       activeStatementNote(history, phase)
@@ -2302,7 +2346,7 @@ function buildStudyGuidePautaPrompt(payload){
   ].join('\n');
 
   return {
-    system: `${GUIDE_PAUTA_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${contexto}`,
+    system: `${GUIDE_PAUTA_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${ANSWER_EQUIVALENCE_RULES_JSON}\n\n${contexto}`,
     schema: GUIDE_PAUTA_OUTPUT_SCHEMA,
     // Treinta desarrollos paso a paso más sus criterios rondan los 10.000 tokens,
     // y con 12.000 la pauta se cortaba de a ratos: el modelo se pasaba de largo en
@@ -2752,6 +2796,32 @@ async function handleAdminStats(request, env, origin, payload){
 }
 
 /* --- Handler --------------------------------------------------------------- */
+
+/* --- Exportaciones para el banco de pruebas --------------------------------
+   Lo que corre en producción es `export default`; esto es lo que importa
+   worker/tests para armar prompts reales y comprobar que las reglas de
+   equivalencia viajan dentro de ellos.
+
+   Van todas como función a propósito: workerd solo acepta funciones y handlers
+   entre las exportaciones con nombre del módulo de entrada, y exportar los
+   bloques de reglas como constantes bota el Worker al arrancar ("Incorrect type
+   for map entry ...: the provided value is not of type 'function or
+   ExportedHandler'"). */
+function reglasParaPruebas(){
+  return {
+    equivalencia: ANSWER_EQUIVALENCE_RULES,
+    equivalenciaJson: ANSWER_EQUIVALENCE_RULES_JSON,
+    impugnacion: STUDENT_PUSHBACK_RULES,
+    metodos: METHOD_FLEXIBILITY_RULES
+  };
+}
+
+export {
+  reglasParaPruebas,
+  buildTopicChatPrompt,
+  buildStudySessionPrompt,
+  buildStudyGuidePautaPrompt
+};
 
 export default {
   async fetch(request, env){
