@@ -1278,6 +1278,44 @@ const LEVELS = {
 const RELEVANCE_WEIGHT = { Alta: 3, Media: 2, Baja: 1 };
 const LEVEL_SCORE = { alto: 0, medio: 0.5, bajo: 1 };
 
+// Baraja las alternativas de una pregunta y devuelve dónde quedó la correcta.
+//
+// El Worker ya las baraja antes de responder, que es donde corresponde. Esto es
+// la red de abajo: el sitio y el Worker se publican por separado —uno con un
+// push a GitHub Pages, el otro con `wrangler deploy`—, así que hay una ventana
+// en la que la página nueva habla con un Worker viejo que todavía manda la
+// correcta siempre primera. Barajar dos veces no hace daño; no barajar ninguna
+// deja el test midiendo la memoria del alumno para la letra "a".
+//
+// Corre una sola vez por análisis, en el normalizado que precede a guardar: si
+// corriera al pintar, las alternativas se moverían de lugar entre una pasada y
+// otra y la respuesta guardada apuntaría a otra opción.
+function shuffleOptions(options, correctIndex){
+  const order = options.map((_, i) => i);
+  for(let i = order.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+  }
+  return { options: order.map(i => options[i]), correctIndex: order.indexOf(correctIndex) };
+}
+
+// "No lo sé / Tengo dudas" es la salida del que no sabe: va siempre al final, no
+// repartida entre las alternativas reales. Se aparta antes de barajar.
+function isDontKnowOption(option){
+  const norm = normalizeTxt(option);
+  return norm.includes('no lo se') || norm.includes('no se') ||
+         norm.includes('tengo dudas') || norm.includes('no estoy seguro');
+}
+
+function shuffleKeepingDontKnow(options, correctIndex){
+  const last = options.length - 1;
+  if(last < 1 || !isDontKnowOption(options[last]) || correctIndex === last){
+    return shuffleOptions(options, correctIndex);
+  }
+  const mixed = shuffleOptions(options.slice(0, last), correctIndex);
+  return { options: [...mixed.options, options[last]], correctIndex: mixed.correctIndex };
+}
+
 function normalizeTopic(raw, index){
   if(!raw || typeof raw !== 'object') return null;
   const name = String(raw.name || '').trim();
@@ -1295,12 +1333,16 @@ function normalizeTopic(raw, index){
   const usable = question && options.length >= 2 &&
     Number.isInteger(correctIndex) && correctIndex >= 0 && correctIndex < options.length;
 
+  const mixed = usable ? shuffleKeepingDontKnow(options, correctIndex) : null;
+
   return {
     id: String(raw.id || '').trim() || `tema_${index + 1}`,
     name,
     relevance: RELEVANCE_VALUES.includes(raw.relevance) ? raw.relevance : 'Media',
     type: TYPE_VALUES.includes(raw.type) ? raw.type : 'Teórico',
-    diagnosticQuestion: usable ? { question, options, correctIndex } : null,
+    diagnosticQuestion: mixed
+      ? { question, options: mixed.options, correctIndex: mixed.correctIndex }
+      : null,
     studySteps: Array.isArray(raw.studySteps)
       ? raw.studySteps.map(s => String(s).trim()).filter(Boolean).slice(0, 6)
       : []
@@ -3433,7 +3475,13 @@ function normalizePracticeQuizItem(raw){
   const correctIndex = Number(raw.correctIndex);
   if(!pregunta || alternativas.length < 2) return null;
   if(!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= alternativas.length) return null;
-  return { pregunta, alternativas, correctIndex, explicacion: String(raw.explicacion || '').trim() };
+  const mixed = shuffleOptions(alternativas, correctIndex);
+  return {
+    pregunta,
+    alternativas: mixed.options,
+    correctIndex: mixed.correctIndex,
+    explicacion: String(raw.explicacion || '').trim()
+  };
 }
 
 function normalizePracticeResult(raw){
@@ -4434,11 +4482,13 @@ function normalizeExamQuestions(raw){
     if(options.length < 2) continue;
     if(!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex >= options.length) continue;
 
+    const mixed = shuffleOptions(options, correctIndex);
+
     out.push({
       topicTitle: String(item.topicTitle || '').trim(),
       question,
-      options,
-      correctIndex,
+      options: mixed.options,
+      correctIndex: mixed.correctIndex,
       explanation: String(item.explanation || '').trim()
     });
   }
@@ -6116,13 +6166,20 @@ function clearTopicChatThreads(course){
   });
 }
 
-/* --- Markdown simple ------------------------------------------------------
-   La respuesta del chat es texto, no JSON: es el único lugar de la app donde el
-   modelo escribe formato. Se soporta lo que se le pidió en el prompt (negritas,
-   cursivas, listas, código en línea) y nada más. Todo pasa primero por
-   escapeHtml, así que ni el modelo ni un mensaje pegado por el alumno pueden
-   inyectar HTML: las etiquetas se agregan recién después, sobre texto ya
-   neutralizado. */
+/* --- Markdown del chat, con figuras ----------------------------------------
+   La respuesta del chat y la de la clase guiada son texto, no JSON: son los dos
+   únicos lugares de la app donde el modelo escribe formato. Se soporta lo que se
+   le pidió en el prompt —negritas, cursivas, listas, código en línea, tablas y
+   los dos bloques de figura de APOYO VISUAL— y nada más.
+
+   Todo el texto pasa primero por escapeHtml, así que ni el modelo ni un mensaje
+   pegado por el alumno pueden inyectar HTML: las etiquetas se agregan recién
+   después, sobre texto ya neutralizado. Las figuras no son la excepción: el SVG
+   lo arma esta app a partir de números y etiquetas ya escapados; del modelo nunca
+   se copia marcado, solo datos. Por eso no se acepta SVG en crudo ni se carga
+   ninguna librería de diagramas: un dibujo que viene escrito por el modelo es
+   marcado ajeno metido en la página, y aquí no hay nada que lo sanee.
+   ------------------------------------------------------------------------- */
 
 function chatInline(text){
   let html = escapeHtml(text);
@@ -6135,13 +6192,789 @@ function chatInline(text){
   return html;
 }
 
+/* --- Utilidades numéricas de las figuras ----------------------------------- */
+
+// Los ids de los marcadores de flecha tienen que ser únicos en toda la página:
+// dos diagramas con el mismo id comparten marcador y el segundo pierde la punta.
+let figureSeq = 0;
+
+function dgNum(value){
+  const n = Number(String(value == null ? '' : value).trim().replace(/\s+/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Etiqueta de un eje: pocas cifras, sin ruido. Los miles y los millones se
+// abrevian porque si no la etiqueta se come el gráfico.
+function dgFormat(v){
+  if(!Number.isFinite(v)) return '';
+  const a = Math.abs(v);
+  if(a >= 1e6) return trimZeros((v / 1e6).toFixed(1)) + 'M';
+  if(a >= 1e4) return trimZeros((v / 1e3).toFixed(1)) + 'k';
+  if(a === 0) return '0';
+  if(a < 0.01) return v.toExponential(1);
+  if(a < 1) return trimZeros(v.toFixed(3));
+  if(a < 10) return trimZeros(v.toFixed(2));
+  if(a < 100) return trimZeros(v.toFixed(1));
+  return String(Math.round(v));
+}
+
+function trimZeros(s){
+  return String(s).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+// Paso de grilla "redondo" (1, 2, 5, 10, 20, 50...): con pasos arbitrarios las
+// marcas del eje quedan en 3.7142 y el gráfico se vuelve ilegible.
+function dgNiceStep(span, target){
+  if(!(span > 0)) return 1;
+  const rough = span / Math.max(1, target);
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const step = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+  return step * mag;
+}
+
+// Rango de un eje a partir de los datos. Cuando todos los valores son positivos
+// el eje parte en cero: en oferta y demanda, en costos o en presupuestos, un eje
+// que parte en 37 miente sobre las proporciones.
+function dgDomain(values, forceZero){
+  const nums = values.filter(v => Number.isFinite(v));
+  if(!nums.length) return { min: 0, max: 1 };
+  let min = Math.min(...nums);
+  let max = Math.max(...nums);
+  if(forceZero !== false){
+    if(min > 0) min = 0;
+    if(max < 0) max = 0;
+  }
+  if(min === max){ min -= 1; max += 1; }
+  const pad = (max - min) * 0.06;
+  return { min: min - (min === 0 ? 0 : pad), max: max + pad };
+}
+
+// Los percentiles acotan las curvas que se van al infinito (1/x, ln x cerca de
+// cero): sin esto una asíntota aplasta el resto del gráfico contra el eje.
+function dgClipRange(values){
+  const nums = values.filter(v => Number.isFinite(v)).sort((a, b) => a - b);
+  if(nums.length < 8) return nums;
+  const lo = nums[Math.floor(nums.length * 0.02)];
+  const hi = nums[Math.floor(nums.length * 0.98)];
+  return nums.filter(v => v >= lo && v <= hi);
+}
+
+/* --- Evaluador de expresiones ----------------------------------------------
+   Para las líneas "curva:", que traen una función de x. Es un intérprete propio
+   —tokenizador, shunting-yard y pila— y no un `eval` disfrazado: lo que entra es
+   texto escrito por el modelo, y `eval` o `new Function` sobre eso sería
+   ejecutar código ajeno en la página del alumno. Aquí lo que no está en la lista
+   de operadores y funciones no se evalúa: devuelve null y el bloque cae a texto.
+   ------------------------------------------------------------------------- */
+
+const DG_FUNCTIONS = {
+  raiz: Math.sqrt, sqrt: Math.sqrt, abs: Math.abs,
+  ln: Math.log, log: Math.log10, log10: Math.log10, exp: Math.exp,
+  sen: Math.sin, sin: Math.sin, cos: Math.cos, tan: Math.tan,
+  min: Math.min, max: Math.max
+};
+const DG_CONSTANTS = { pi: Math.PI, e: Math.E };
+const DG_PRECEDENCE = { '+': 1, '-': 1, '*': 2, '/': 2, '^': 3 };
+
+function dgTokenize(src){
+  const out = [];
+  const text = String(src).toLowerCase().replace(/\s+/g, '');
+  let i = 0;
+  while(i < text.length){
+    const c = text[i];
+    if(/[0-9.]/.test(c)){
+      const m = text.slice(i).match(/^\d*\.?\d+/);
+      if(!m) return null;
+      out.push({ t: 'num', v: Number(m[0]) });
+      i += m[0].length;
+      continue;
+    }
+    if(/[a-z_]/.test(c)){
+      const m = text.slice(i).match(/^[a-z_][a-z_0-9]*/);
+      const name = m[0];
+      i += name.length;
+      if(DG_FUNCTIONS[name] && text[i] === '(') out.push({ t: 'fn', v: name });
+      else if(name === 'x') out.push({ t: 'var' });
+      else if(name in DG_CONSTANTS) out.push({ t: 'num', v: DG_CONSTANTS[name] });
+      else return null;                       // símbolo desconocido: no se adivina
+      continue;
+    }
+    if('+-*/^(),'.includes(c)){
+      out.push({ t: c === ',' ? 'sep' : (c === '(' || c === ')' ? c : 'op'), v: c });
+      i++;
+      continue;
+    }
+    return null;
+  }
+
+  // Multiplicación implícita: el modelo escribe "2x" y "3(x+1)" aunque se le pida
+  // el asterisco. Se inserta el operador que falta antes de armar la expresión.
+  const withMul = [];
+  for(let k = 0; k < out.length; k++){
+    const prev = withMul[withMul.length - 1];
+    const cur = out[k];
+    const prevValue = prev && (prev.t === 'num' || prev.t === 'var' || prev.v === ')');
+    const curValue = cur.t === 'num' || cur.t === 'var' || cur.t === 'fn' || cur.v === '(';
+    if(prevValue && curValue) withMul.push({ t: 'op', v: '*' });
+    withMul.push(cur);
+  }
+  return withMul;
+}
+
+// Shunting-yard: de infijo a notación polaca inversa.
+function dgToRpn(tokens){
+  const out = [];
+  const stack = [];
+  let prev = null;
+  for(const tk of tokens){
+    if(tk.t === 'num' || tk.t === 'var'){ out.push(tk); }
+    else if(tk.t === 'fn'){ stack.push(tk); }
+    else if(tk.t === 'sep'){
+      while(stack.length && stack[stack.length - 1].v !== '(') out.push(stack.pop());
+      if(!stack.length) return null;
+    }
+    else if(tk.t === 'op'){
+      // Menos unario: -x, 2*-3, (-4)^2.
+      const unary = tk.v === '-' && (!prev || prev.t === 'op' || prev.v === '(' || prev.t === 'sep');
+      if(unary){ out.push({ t: 'num', v: 0 }); }
+      while(stack.length){
+        const top = stack[stack.length - 1];
+        if(top.t === 'fn'){ out.push(stack.pop()); continue; }
+        if(top.t !== 'op') break;
+        const higher = DG_PRECEDENCE[top.v] > DG_PRECEDENCE[tk.v];
+        const equal = DG_PRECEDENCE[top.v] === DG_PRECEDENCE[tk.v] && tk.v !== '^';
+        if(higher || equal) out.push(stack.pop());
+        else break;
+      }
+      stack.push(tk);
+    }
+    else if(tk.v === '('){ stack.push(tk); }
+    else if(tk.v === ')'){
+      while(stack.length && stack[stack.length - 1].v !== '(') out.push(stack.pop());
+      if(!stack.length) return null;
+      stack.pop();
+      if(stack.length && stack[stack.length - 1].t === 'fn') out.push(stack.pop());
+    }
+    prev = tk;
+  }
+  while(stack.length){
+    const top = stack.pop();
+    if(top.v === '(') return null;
+    out.push(top);
+  }
+  return out;
+}
+
+// Devuelve una función de x, o null si la expresión no es evaluable.
+function dgCompile(src){
+  const cleaned = String(src || '')
+    .replace(/^\s*(?:y|f\s*\(\s*x\s*\)|p|q|c|cme|cmg|img?)\s*=\s*/i, '')
+    .trim();
+  if(!cleaned) return null;
+  const tokens = dgTokenize(cleaned);
+  if(!tokens || !tokens.length) return null;
+  const rpn = dgToRpn(tokens);
+  if(!rpn || !rpn.length) return null;
+
+  return function(x){
+    const st = [];
+    for(const tk of rpn){
+      if(tk.t === 'num') st.push(tk.v);
+      else if(tk.t === 'var') st.push(x);
+      else if(tk.t === 'fn'){
+        const fn = DG_FUNCTIONS[tk.v];
+        const arity = (tk.v === 'min' || tk.v === 'max') ? 2 : 1;
+        if(st.length < arity) return NaN;
+        const args = st.splice(st.length - arity, arity);
+        st.push(fn.apply(null, args));
+      }
+      else{
+        if(st.length < 2) return NaN;
+        const b = st.pop(), a = st.pop();
+        st.push(tk.v === '+' ? a + b : tk.v === '-' ? a - b
+              : tk.v === '*' ? a * b : tk.v === '/' ? a / b : Math.pow(a, b));
+      }
+    }
+    return st.length === 1 ? st[0] : NaN;
+  };
+}
+
+/* --- Bloque "grafico": ejes, curvas, barras y nubes de puntos --------------- */
+
+const DG_SERIES_COLORS = ['var(--dg-s1)', 'var(--dg-s2)', 'var(--dg-s3)', 'var(--dg-s4)'];
+
+function parseChartSpec(code){
+  const spec = {
+    tipo: '', titulo: '', ejeX: '', ejeY: '', nota: '',
+    series: [], puntos: [], barras: [], guias: []
+  };
+  let curvaSeq = 0;
+
+  for(const rawLine of String(code).split('\n')){
+    const line = rawLine.trim();
+    if(!line || line.startsWith('#')) continue;
+    const at = line.indexOf(':');
+    if(at === -1) continue;
+    const key = line.slice(0, at).trim().toLowerCase();
+    const rest = line.slice(at + 1).trim();
+    if(!rest) continue;
+    const parts = rest.split('|').map(s => s.trim());
+
+    if(key === 'tipo'){ spec.tipo = rest.toLowerCase(); continue; }
+    if(key === 'titulo' || key === 'título' || key === 'title'){ spec.titulo = rest; continue; }
+    if(key === 'x' || key === 'ejex' || key === 'eje-x'){ spec.ejeX = rest; continue; }
+    if(key === 'y' || key === 'ejey' || key === 'eje-y'){ spec.ejeY = rest; continue; }
+    if(key === 'nota' || key === 'pie'){ spec.nota = rest; continue; }
+
+    if(key === 'recta' || key === 'linea' || key === 'línea' || key === 'serie'){
+      const label = parts.length > 1 ? parts[0] : '';
+      const raw = parts.length > 1 ? parts.slice(1) : parts;
+      const pts = raw.map(p => {
+        const xy = p.split(',').map(v => dgNum(v));
+        return xy.length === 2 && xy[0] !== null && xy[1] !== null ? { x: xy[0], y: xy[1] } : null;
+      }).filter(Boolean);
+      if(pts.length >= 2) spec.series.push({ label, puntos: pts });
+      continue;
+    }
+
+    if(key === 'curva' || key === 'funcion' || key === 'función'){
+      // "Etiqueta | y = expr | a..b", o sin etiqueta y sin rango.
+      let label = '', expr = '', rango = '';
+      if(parts.length >= 3){ label = parts[0]; expr = parts[1]; rango = parts[2]; }
+      else if(parts.length === 2){
+        if(/\.\./.test(parts[1])){ expr = parts[0]; rango = parts[1]; }
+        else { label = parts[0]; expr = parts[1]; }
+      }
+      else expr = parts[0];
+      const fn = dgCompile(expr);
+      if(!fn) continue;
+      const bounds = String(rango).split('..').map(v => dgNum(v));
+      spec.series.push({
+        label: label || `Curva ${++curvaSeq}`,
+        fn,
+        desde: bounds.length === 2 && bounds[0] !== null ? bounds[0] : null,
+        hasta: bounds.length === 2 && bounds[1] !== null ? bounds[1] : null
+      });
+      continue;
+    }
+
+    if(key === 'punto'){
+      const label = parts.length > 1 ? parts[0] : '';
+      const xy = (parts.length > 1 ? parts[1] : parts[0]).split(',').map(v => dgNum(v));
+      if(xy.length === 2 && xy[0] !== null && xy[1] !== null){
+        spec.puntos.push({ label, x: xy[0], y: xy[1] });
+      }
+      continue;
+    }
+
+    if(key === 'barra'){
+      const label = parts.length > 1 ? parts[0] : '';
+      const value = dgNum(parts.length > 1 ? parts[1] : parts[0]);
+      if(value !== null) spec.barras.push({ label, valor: value });
+      continue;
+    }
+
+    if(key === 'vertical' || key === 'horizontal'){
+      const label = parts.length > 1 ? parts[0] : '';
+      const value = dgNum(parts.length > 1 ? parts[1] : parts[0]);
+      if(value !== null) spec.guias.push({ eje: key === 'vertical' ? 'x' : 'y', label, valor: value });
+      continue;
+    }
+  }
+
+  const vacio = !spec.series.length && !spec.puntos.length && !spec.barras.length;
+  return vacio ? null : spec;
+}
+
+// El marco común de los dos tipos de gráfico: título, ejes, grilla y leyenda.
+// Devuelve las funciones de escala para que cada tipo dibuje encima.
+function dgFrame(opt){
+  const W = 660, H = opt.alto || 400;
+  const m = { top: opt.titulo ? 46 : 26, right: 26, bottom: opt.ejeX ? 62 : 48, left: 68 };
+  const pw = W - m.left - m.right;
+  const ph = H - m.top - m.bottom;
+  const svg = [];
+
+  if(opt.titulo){
+    svg.push(`<text class="dg-title" x="${W / 2}" y="26" text-anchor="middle">${escapeHtml(opt.titulo)}</text>`);
+  }
+  svg.push(`<rect class="dg-plot" x="${m.left}" y="${m.top}" width="${pw}" height="${ph}"/>`);
+
+  if(opt.ejeY){
+    svg.push(`<text class="dg-axis-label" transform="rotate(-90 18 ${m.top + ph / 2})" ` +
+             `x="18" y="${m.top + ph / 2}" text-anchor="middle">${escapeHtml(opt.ejeY)}</text>`);
+  }
+  if(opt.ejeX){
+    svg.push(`<text class="dg-axis-label" x="${m.left + pw / 2}" y="${H - 14}" ` +
+             `text-anchor="middle">${escapeHtml(opt.ejeX)}</text>`);
+  }
+  return { W, H, m, pw, ph, svg };
+}
+
+function dgLegend(entries, W, H){
+  if(entries.length < 2) return '';
+  const out = [];
+  let x = 68;
+  entries.slice(0, 4).forEach(e => {
+    out.push(`<line class="dg-legend-line" x1="${x}" y1="${H - 30}" x2="${x + 18}" y2="${H - 30}" stroke="${e.color}"/>`);
+    out.push(`<text class="dg-legend-text" x="${x + 24}" y="${H - 26}">${escapeHtml(e.label)}</text>`);
+    x += 34 + Math.min(150, e.label.length * 6.6);
+  });
+  return out.join('');
+}
+
+function buildAxesChart(spec){
+  // Muestreo de las curvas antes de fijar la escala: los valores son parte de
+  // los datos, no algo que se dibuje después sobre un eje ya decidido.
+  const SAMPLES = 180;
+  const fijos = [];
+  spec.series.forEach(s => { if(s.puntos) s.puntos.forEach(p => fijos.push(p)); });
+  spec.puntos.forEach(p => fijos.push(p));
+
+  const xsFijos = fijos.map(p => p.x);
+  spec.guias.forEach(g => { if(g.eje === 'x') xsFijos.push(g.valor); });
+  const curvas = spec.series.filter(s => s.fn);
+  curvas.forEach(s => {
+    if(s.desde !== null) xsFijos.push(s.desde);
+    if(s.hasta !== null) xsFijos.push(s.hasta);
+  });
+
+  const xDom = dgDomain(xsFijos.length ? xsFijos : [0, 10]);
+  curvas.forEach(s => {
+    const a = s.desde !== null ? s.desde : xDom.min;
+    const b = s.hasta !== null ? s.hasta : xDom.max;
+    s.muestras = [];
+    for(let i = 0; i <= SAMPLES; i++){
+      const x = a + (b - a) * (i / SAMPLES);
+      const y = s.fn(x);
+      s.muestras.push({ x, y: Number.isFinite(y) ? y : null });
+    }
+  });
+
+  const ysFijos = fijos.map(p => p.y);
+  spec.guias.forEach(g => { if(g.eje === 'y') ysFijos.push(g.valor); });
+  const ysCurva = dgClipRange([].concat(...curvas.map(s => s.muestras.map(p => p.y))));
+  const yDom = dgDomain(ysFijos.concat(ysCurva));
+
+  const f = dgFrame({ titulo: spec.titulo, ejeX: spec.ejeX, ejeY: spec.ejeY });
+  const { m, pw, ph, W, H } = f;
+  const sx = v => m.left + ((v - xDom.min) / (xDom.max - xDom.min)) * pw;
+  const sy = v => m.top + ph - ((v - yDom.min) / (yDom.max - yDom.min)) * ph;
+
+  // Grilla y marcas.
+  const stepX = dgNiceStep(xDom.max - xDom.min, 6);
+  for(let v = Math.ceil(xDom.min / stepX) * stepX; v <= xDom.max + 1e-9; v += stepX){
+    const x = sx(v);
+    f.svg.push(`<line class="dg-grid" x1="${x.toFixed(1)}" y1="${m.top}" x2="${x.toFixed(1)}" y2="${m.top + ph}"/>`);
+    f.svg.push(`<text class="dg-tick" x="${x.toFixed(1)}" y="${m.top + ph + 17}" text-anchor="middle">${escapeHtml(dgFormat(v))}</text>`);
+  }
+  const stepY = dgNiceStep(yDom.max - yDom.min, 5);
+  for(let v = Math.ceil(yDom.min / stepY) * stepY; v <= yDom.max + 1e-9; v += stepY){
+    const y = sy(v);
+    f.svg.push(`<line class="dg-grid" x1="${m.left}" y1="${y.toFixed(1)}" x2="${m.left + pw}" y2="${y.toFixed(1)}"/>`);
+    f.svg.push(`<text class="dg-tick" x="${m.left - 9}" y="${(y + 4).toFixed(1)}" text-anchor="end">${escapeHtml(dgFormat(v))}</text>`);
+  }
+  // El cero, cuando cae dentro del gráfico, se marca más fuerte que la grilla.
+  if(yDom.min < 0 && yDom.max > 0){
+    f.svg.push(`<line class="dg-zero" x1="${m.left}" y1="${sy(0).toFixed(1)}" x2="${m.left + pw}" y2="${sy(0).toFixed(1)}"/>`);
+  }
+  if(xDom.min < 0 && xDom.max > 0){
+    f.svg.push(`<line class="dg-zero" x1="${sx(0).toFixed(1)}" y1="${m.top}" x2="${sx(0).toFixed(1)}" y2="${m.top + ph}"/>`);
+  }
+
+  const clipId = `dg-clip-${++figureSeq}`;
+  const body = [];
+  const legend = [];
+
+  spec.series.forEach((s, i) => {
+    const color = DG_SERIES_COLORS[i % DG_SERIES_COLORS.length];
+    const puntos = s.fn ? s.muestras : s.puntos;
+    let d = '';
+    let abierto = false;
+    puntos.forEach(p => {
+      if(p.y === null || !Number.isFinite(p.y)){ abierto = false; return; }
+      const cmd = abierto ? 'L' : 'M';
+      d += `${cmd}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)} `;
+      abierto = true;
+    });
+    if(d) body.push(`<path class="dg-serie" d="${d.trim()}" stroke="${color}"/>`);
+    if(s.label) legend.push({ label: s.label, color });
+  });
+
+  spec.guias.forEach(g => {
+    if(g.eje === 'x'){
+      const x = sx(g.valor);
+      body.push(`<line class="dg-guide" x1="${x.toFixed(1)}" y1="${m.top}" x2="${x.toFixed(1)}" y2="${m.top + ph}"/>`);
+      if(g.label) body.push(`<text class="dg-guide-text" x="${(x + 5).toFixed(1)}" y="${m.top + 14}">${escapeHtml(g.label)}</text>`);
+    }else{
+      const y = sy(g.valor);
+      body.push(`<line class="dg-guide" x1="${m.left}" y1="${y.toFixed(1)}" x2="${m.left + pw}" y2="${y.toFixed(1)}"/>`);
+      if(g.label) body.push(`<text class="dg-guide-text" x="${m.left + 6}" y="${(y - 6).toFixed(1)}">${escapeHtml(g.label)}</text>`);
+    }
+  });
+
+  const disperso = /dispers|nube|scatter/.test(spec.tipo);
+  spec.puntos.forEach(p => {
+    const x = sx(p.x), y = sy(p.y);
+    body.push(`<circle class="${disperso ? 'dg-dot' : 'dg-point'}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${disperso ? 3.6 : 5}"/>`);
+    if(p.label && !disperso){
+      const derecha = x < m.left + pw - 90;
+      body.push(`<text class="dg-point-text" x="${(derecha ? x + 9 : x - 9).toFixed(1)}" y="${(y - 9).toFixed(1)}" ` +
+                `text-anchor="${derecha ? 'start' : 'end'}">${escapeHtml(p.label)}</text>`);
+    }
+  });
+
+  f.svg.push(`<defs><clipPath id="${clipId}"><rect x="${m.left}" y="${m.top}" width="${pw}" height="${ph}"/></clipPath></defs>`);
+  f.svg.push(`<g clip-path="url(#${clipId})">${body.join('')}</g>`);
+  f.svg.push(dgLegend(legend, W, H));
+  return { W, H, inner: f.svg.join('') };
+}
+
+function buildBarsChart(spec){
+  const valores = spec.barras.map(b => b.valor);
+  const yDom = dgDomain(valores);
+  const f = dgFrame({ titulo: spec.titulo, ejeX: spec.ejeX, ejeY: spec.ejeY });
+  const { m, pw, ph, W, H } = f;
+  const sy = v => m.top + ph - ((v - yDom.min) / (yDom.max - yDom.min)) * ph;
+
+  const stepY = dgNiceStep(yDom.max - yDom.min, 5);
+  for(let v = Math.ceil(yDom.min / stepY) * stepY; v <= yDom.max + 1e-9; v += stepY){
+    const y = sy(v);
+    f.svg.push(`<line class="dg-grid" x1="${m.left}" y1="${y.toFixed(1)}" x2="${m.left + pw}" y2="${y.toFixed(1)}"/>`);
+    f.svg.push(`<text class="dg-tick" x="${m.left - 9}" y="${(y + 4).toFixed(1)}" text-anchor="end">${escapeHtml(dgFormat(v))}</text>`);
+  }
+
+  const n = spec.barras.length;
+  const slot = pw / n;
+  const ancho = Math.max(10, Math.min(72, slot * 0.62));
+  const base = sy(Math.max(0, yDom.min));
+
+  spec.barras.forEach((b, i) => {
+    const cx = m.left + slot * (i + 0.5);
+    const top = sy(b.valor);
+    const y = Math.min(top, base);
+    const alto = Math.max(1, Math.abs(base - top));
+    f.svg.push(`<rect class="dg-bar" x="${(cx - ancho / 2).toFixed(1)}" y="${y.toFixed(1)}" ` +
+               `width="${ancho.toFixed(1)}" height="${alto.toFixed(1)}" fill="${DG_SERIES_COLORS[i % DG_SERIES_COLORS.length]}"/>`);
+    f.svg.push(`<text class="dg-bar-value" x="${cx.toFixed(1)}" y="${(top - 7).toFixed(1)}" text-anchor="middle">${escapeHtml(dgFormat(b.valor))}</text>`);
+    if(b.label){
+      f.svg.push(`<text class="dg-tick" x="${cx.toFixed(1)}" y="${(m.top + ph + 18).toFixed(1)}" text-anchor="middle">${escapeHtml(b.label.slice(0, 14))}</text>`);
+    }
+  });
+
+  return { W, H, inner: f.svg.join('') };
+}
+
+function renderChartFence(code){
+  const spec = parseChartSpec(code);
+  if(!spec) return null;
+  let built;
+  try{
+    built = spec.barras.length ? buildBarsChart(spec) : buildAxesChart(spec);
+  }catch(err){
+    return null;   // una figura rota no puede botar el mensaje entero
+  }
+  const alt = spec.titulo || spec.ejeY || 'Gráfico';
+  return figureHtml(
+    `<svg class="dg-svg" viewBox="0 0 ${built.W} ${built.H}" role="img" ` +
+    `aria-label="${escapeHtml(`Gráfico: ${alt}`)}" preserveAspectRatio="xMidYMid meet">${built.inner}</svg>`,
+    spec.nota
+  );
+}
+
+/* --- Bloque "mermaid": diagramas de flujo y árboles de decisión -------------
+   Se acepta el subconjunto de Mermaid que de verdad hace falta —flowchart TD/LR,
+   nodos con forma y flechas con etiqueta— y lo dibuja esta misma app. No se carga
+   Mermaid: son 400 KB de librería y un intérprete de texto ajeno más, cuando lo
+   que se necesita son cajas y flechas. Lo que no calce con esta gramática cae a
+   bloque de texto, que es exactamente lo que se veía antes.
+   ------------------------------------------------------------------------- */
+
+const DG_EDGE_RE = /^\s*(-{2,3}>|-{3}|-\.->|={2,}>|~~~)\s*(?:\|([^|]*)\|)?\s*/;
+
+function dgReadNode(text){
+  const head = text.match(/^\s*([A-Za-z0-9_]+)\s*/);
+  if(!head) return null;
+  let rest = text.slice(head[0].length);
+  let label = '', shape = 'rect';
+
+  const open = rest[0];
+  if(open === '[' || open === '(' || open === '{'){
+    const close = open === '[' ? ']' : open === '(' ? ')' : '}';
+    let depth = 0, k = 0;
+    for(; k < rest.length; k++){
+      if(rest[k] === open) depth++;
+      else if(rest[k] === close){ depth--; if(depth === 0){ k++; break; } }
+    }
+    if(depth !== 0) return null;              // paréntesis sin cerrar
+    label = rest.slice(0, k)
+      .replace(/^[[({]+/, '').replace(/[\])}]+$/, '')
+      .replace(/^["']|["']$/g, '').trim();
+    shape = open === '{' ? 'diamond' : open === '(' ? 'round' : 'rect';
+    rest = rest.slice(k);
+  }
+  return { id: head[1], label, shape, rest };
+}
+
+function parseFlowSpec(code){
+  const nodes = new Map();
+  const edges = [];
+  let dir = 'TD';
+
+  const touch = (n) => {
+    const prev = nodes.get(n.id);
+    if(!prev){ nodes.set(n.id, { id: n.id, label: n.label || n.id, shape: n.shape }); return; }
+    if(n.label){ prev.label = n.label; prev.shape = n.shape; }
+  };
+
+  for(const rawLine of String(code).split('\n')){
+    let line = rawLine.trim();
+    if(!line || line.startsWith('%%')) continue;
+
+    const header = line.match(/^(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/i);
+    if(header){ dir = header[1].toUpperCase(); continue; }
+    if(/^(?:flowchart|graph)\b/i.test(line)){ continue; }
+    // Lo que no dibujamos se ignora en vez de romper el diagrama.
+    if(/^(?:subgraph|end|classDef|class|style|click|linkStyle|direction)\b/i.test(line)) continue;
+
+    let node = dgReadNode(line);
+    if(!node) continue;
+    touch(node);
+    let rest = node.rest;
+    let from = node.id;
+
+    while(true){
+      const link = rest.match(DG_EDGE_RE);
+      if(!link) break;
+      rest = rest.slice(link[0].length);
+      const next = dgReadNode(rest);
+      if(!next) break;
+      touch(next);
+      edges.push({ from, to: next.id, label: (link[2] || '').trim() });
+      from = next.id;
+      rest = next.rest;
+    }
+  }
+
+  if(!nodes.size) return null;
+  return { dir, nodes: [...nodes.values()], edges };
+}
+
+// Corta una etiqueta en líneas para que quepa en la caja.
+function dgWrap(text, maxChars, maxLines){
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for(const w of words){
+    const next = cur ? `${cur} ${w}` : w;
+    if(next.length > maxChars && cur){ lines.push(cur); cur = w; }
+    else cur = next;
+  }
+  if(cur) lines.push(cur);
+  if(lines.length > maxLines){
+    lines.length = maxLines;
+    lines[maxLines - 1] = lines[maxLines - 1].slice(0, maxChars - 1) + '…';
+  }
+  return lines.length ? lines : [''];
+}
+
+function buildFlowSvg(spec){
+  const horizontal = spec.dir === 'LR' || spec.dir === 'RL';
+  const byId = new Map();
+
+  spec.nodes.forEach(n => {
+    const lineas = dgWrap(n.label, 22, 3);
+    const ancho = Math.max(...lineas.map(l => l.length));
+    let w = Math.max(104, Math.min(212, ancho * 7.6 + 30));
+    let h = 34 + (lineas.length - 1) * 17;
+    if(n.shape === 'diamond'){ w = Math.min(240, w * 1.28); h += 16; }
+    byId.set(n.id, { ...n, lineas, w, h });
+  });
+
+  // Rango de cada nodo: camino más largo desde las raíces. El tope de pasadas
+  // deja pasar los ciclos sin colgarse; un ciclo dibuja igual, solo que plano.
+  const rango = new Map(spec.nodes.map(n => [n.id, 0]));
+  for(let pass = 0; pass < spec.nodes.length; pass++){
+    let cambio = false;
+    for(const e of spec.edges){
+      if(!rango.has(e.from) || !rango.has(e.to)) continue;
+      const r = rango.get(e.from) + 1;
+      if(r > rango.get(e.to)){ rango.set(e.to, r); cambio = true; }
+    }
+    if(!cambio) break;
+  }
+
+  const filas = [];
+  spec.nodes.forEach(n => {
+    const r = rango.get(n.id) || 0;
+    (filas[r] = filas[r] || []).push(byId.get(n.id));
+  });
+
+  const PAD = 18, GAP_CRUZADO = 26, GAP_RANGO = 54;
+  let cursor = PAD;
+  let extent = 0;
+
+  filas.forEach(fila => {
+    if(!fila) return;
+    const grueso = Math.max(...fila.map(n => horizontal ? n.w : n.h));
+    const largo = fila.reduce((acc, n) => acc + (horizontal ? n.h : n.w), 0) +
+                  GAP_CRUZADO * (fila.length - 1);
+    extent = Math.max(extent, largo);
+    fila.forEach(n => { n._rango = cursor; n._grueso = grueso; });
+    cursor += grueso + GAP_RANGO;
+  });
+  const total = cursor - GAP_RANGO + PAD;
+
+  const W = horizontal ? total : extent + PAD * 2;
+  const H = horizontal ? extent + PAD * 2 : total;
+
+  filas.forEach(fila => {
+    if(!fila) return;
+    const largo = fila.reduce((acc, n) => acc + (horizontal ? n.h : n.w), 0) +
+                  GAP_CRUZADO * (fila.length - 1);
+    let pos = ((horizontal ? H : W) - largo) / 2;
+    fila.forEach(n => {
+      if(horizontal){
+        n.x = n._rango; n.y = pos; pos += n.h + GAP_CRUZADO;
+      }else{
+        n.x = pos; n.y = n._rango; pos += n.w + GAP_CRUZADO;
+      }
+      n.cx = n.x + n.w / 2;
+      n.cy = n.y + n.h / 2;
+    });
+  });
+
+  const marker = `dg-arrow-${++figureSeq}`;
+  const out = [`<defs><marker id="${marker}" viewBox="0 0 10 10" refX="9" refY="5" ` +
+               `markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+               `<path class="dg-arrow" d="M0,1 L9,5 L0,9 z"/></marker></defs>`];
+
+  // Las flechas van primero: así ninguna cruza por encima de una caja.
+  spec.edges.forEach(e => {
+    const a = byId.get(e.from), b = byId.get(e.to);
+    if(!a || !b) return;
+    const salida = horizontal ? { x: a.x + a.w, y: a.cy } : { x: a.cx, y: a.y + a.h };
+    const entrada = horizontal ? { x: b.x, y: b.cy } : { x: b.cx, y: b.y };
+    out.push(`<line class="dg-edge" x1="${salida.x.toFixed(1)}" y1="${salida.y.toFixed(1)}" ` +
+             `x2="${entrada.x.toFixed(1)}" y2="${entrada.y.toFixed(1)}" marker-end="url(#${marker})"/>`);
+    if(e.label){
+      const mx = (salida.x + entrada.x) / 2;
+      const my = (salida.y + entrada.y) / 2;
+      const texto = e.label.slice(0, 22);
+      const ancho = texto.length * 6.4 + 12;
+      out.push(`<rect class="dg-edge-chip" x="${(mx - ancho / 2).toFixed(1)}" y="${(my - 10).toFixed(1)}" ` +
+               `width="${ancho.toFixed(1)}" height="19" rx="3"/>`);
+      out.push(`<text class="dg-edge-text" x="${mx.toFixed(1)}" y="${(my + 4).toFixed(1)}" ` +
+               `text-anchor="middle">${escapeHtml(texto)}</text>`);
+    }
+  });
+
+  byId.forEach(n => {
+    if(n.shape === 'diamond'){
+      const pts = `${n.cx},${n.y} ${n.x + n.w},${n.cy} ${n.cx},${n.y + n.h} ${n.x},${n.cy}`;
+      out.push(`<polygon class="dg-node dg-node-decision" points="${pts}"/>`);
+    }else{
+      const rx = n.shape === 'round' ? Math.min(18, n.h / 2) : 3;
+      out.push(`<rect class="dg-node" x="${n.x.toFixed(1)}" y="${n.y.toFixed(1)}" ` +
+               `width="${n.w.toFixed(1)}" height="${n.h.toFixed(1)}" rx="${rx}"/>`);
+    }
+    const primera = n.cy - (n.lineas.length - 1) * 8.5 + 4.5;
+    n.lineas.forEach((linea, i) => {
+      out.push(`<text class="dg-node-text" x="${n.cx.toFixed(1)}" y="${(primera + i * 17).toFixed(1)}" ` +
+               `text-anchor="middle">${escapeHtml(linea)}</text>`);
+    });
+  });
+
+  return { W: Math.round(W), H: Math.round(H), inner: out.join('') };
+}
+
+function renderFlowFence(code){
+  const spec = parseFlowSpec(code);
+  if(!spec) return null;
+  let built;
+  try{ built = buildFlowSvg(spec); }
+  catch(err){ return null; }
+  return figureHtml(
+    `<svg class="dg-svg dg-svg-flow" viewBox="0 0 ${built.W} ${built.H}" role="img" ` +
+    `aria-label="Diagrama de flujo" preserveAspectRatio="xMidYMid meet" ` +
+    `style="max-width:${built.W}px">${built.inner}</svg>`,
+    ''
+  );
+}
+
+function figureHtml(svg, nota){
+  return `<figure class="chat-figure">${svg}` +
+         (nota ? `<figcaption>${chatInline(nota)}</figcaption>` : '') +
+         `</figure>`;
+}
+
+// Un bloque con cerca: figura si se entiende, y si no, el texto tal cual, en
+// monoespaciado y con su indentación intacta (que es lo que necesita el arte
+// ASCII y una tabla alineada a mano).
+function renderFence(lang, code){
+  const body = String(code).replace(/\s+$/, '');
+  if(!body.trim()) return '';
+
+  if(/^(grafico|gráfico|chart|plot|grafica|gráfica)$/.test(lang)){
+    const fig = renderChartFence(body);
+    if(fig) return fig;
+  }
+  if(/^(mermaid|diagrama|diagram|flowchart|graph)$/.test(lang)){
+    const fig = renderFlowFence(body);
+    if(fig) return fig;
+  }
+  // Mermaid sin etiquetar: el modelo a veces abre la cerca a secas.
+  if(!lang && /^\s*(?:flowchart|graph)\s+(?:TD|TB|BT|LR|RL)\b/i.test(body)){
+    const fig = renderFlowFence(body);
+    if(fig) return fig;
+  }
+  return `<pre class="chat-pre"><code>${escapeHtml(body)}</code></pre>`;
+}
+
+// Tabla markdown: la fila de guiones se descarta y la primera fila queda de
+// encabezado solo si venía esa fila separadora.
+function renderTable(rows){
+  const celdas = rows.map(r => r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim()));
+  const separador = celdas.length > 1 && celdas[1].every(c => /^:?-{2,}:?$/.test(c));
+  const head = separador ? celdas[0] : null;
+  const body = celdas.filter((_, i) => separador ? i > 1 : true);
+
+  const th = head ? `<thead><tr>${head.map(c => `<th>${chatInline(c)}</th>`).join('')}</tr></thead>` : '';
+  const td = body.map(fila => `<tr>${fila.map(c => `<td>${chatInline(c)}</td>`).join('')}</tr>`).join('');
+  return `<div class="chat-table-wrap"><table class="chat-table">${th}<tbody>${td}</tbody></table></div>`;
+}
+
 function chatMarkdownToHtml(text){
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
   const out = [];
   let list = '';                                   // '', 'ul' u 'ol'
   const closeList = () => { if(list){ out.push(`</${list}>`); list = ''; } };
 
-  for(const raw of lines){
+  for(let i = 0; i < lines.length; i++){
+    const raw = lines[i];
+
+    // Bloque con cerca: se consume entero, incluida la cerca de cierre.
+    const fence = raw.match(/^\s*```+\s*([A-Za-zÀ-ÿ0-9_-]*)\s*$/);
+    if(fence){
+      closeList();
+      const body = [];
+      i++;
+      while(i < lines.length && !/^\s*```/.test(lines[i])){ body.push(lines[i]); i++; }
+      out.push(renderFence(fence[1].toLowerCase(), body.join('\n')));
+      continue;
+    }
+
+    // Tabla: todas las filas seguidas que empiezan con barra.
+    if(/^\s*\|.*\|/.test(raw)){
+      closeList();
+      const rows = [];
+      while(i < lines.length && /^\s*\|/.test(lines[i])){ rows.push(lines[i]); i++; }
+      i--;
+      out.push(renderTable(rows));
+      continue;
+    }
+
     const line = raw.trim();
     if(!line){ closeList(); continue; }
 

@@ -126,7 +126,11 @@ const MAX_FEYNMAN_SUMMARY_CHARS  = 400;
 const MAX_CHAT_MESSAGE_CHARS = 1200;   // lo que escribe el alumno
 const MAX_CHAT_HISTORY_TURNS = 12;     // mensajes previos que se conservan
 const MAX_CHAT_HISTORY_CHARS = 6000;   // tope acumulado del historial
-const MAX_CHAT_REPLY_CHARS   = 4000;   // lo que se publica de la respuesta
+// Los turnos del ayudante son más largos que los del alumno —un desarrollo con
+// pasos, o una figura— y con el tope del alumno se cortaban a la mitad en el
+// historial. El tope acumulado no sube: lo que cambia es el reparto.
+const MAX_CHAT_HISTORY_IA_CHARS = 2200;
+const MAX_CHAT_REPLY_CHARS   = 5200;   // lo que se publica de la respuesta
 // Contexto del tema: los pasos de estudio y el temario acotan de qué se habla.
 const MAX_CHAT_STEPS         = 6;
 const MAX_CHAT_STEP_CHARS    = 240;
@@ -139,7 +143,11 @@ const SESSION_PHASES              = ['teoria', 'practica', 'cierre'];
 const MAX_SESSION_MESSAGE_CHARS   = 1500;   // lo que escribe el alumno
 const MAX_SESSION_HISTORY_TURNS   = 16;     // mensajes previos que se conservan
 const MAX_SESSION_HISTORY_CHARS   = 9000;   // tope acumulado del historial
-const MAX_SESSION_REPLY_CHARS     = 4500;   // lo que se publica de la respuesta
+// Igual que en el chat: el turno del profesor trae la explicación, el ejercicio
+// y a veces un gráfico, y con el tope del alumno llegaba cortado al turno
+// siguiente. El acumulado del historial no cambia.
+const MAX_SESSION_HISTORY_IA_CHARS = 2600;
+const MAX_SESSION_REPLY_CHARS     = 6500;   // lo que se publica de la respuesta
 
 // Programa del tema: cuántas sesiones puede tener y cuánto material de
 // evaluaciones pasadas se le manda al profesor para que saque los ejercicios de
@@ -191,6 +199,101 @@ const LEVEL_VALUES = ['Alto', 'Medio', 'Bajo'];
 
 // Última alternativa obligatoria de cada pregunta diagnóstica.
 const DONT_KNOW_OPTION = 'No lo sé / Tengo dudas';
+
+/* --- Reglas transversales de rigor, corrección y apoyo visual ---------------
+   Los ocho modos comparten profesor: el mismo que arma el diagnóstico corrige el
+   ejercicio de la clase guiada. Estas reglas viven fuera de cada prompt porque
+   son las mismas en todos, y arreglarlas en un solo lugar las arregla en todos.
+
+   Cada builder las pega al final de su system prompt (ver los `system:` de más
+   abajo), después del rol y antes del contexto de la llamada. */
+
+// Las cercas de tres tildes se escriben en una constante: dentro de un template
+// literal habría que escaparlas una por una y el prompt se vuelve ilegible.
+const FENCE = '```';
+
+// Aritmética comprobada antes de escribir. El modelo se equivoca en cuentas de
+// primero básico cuando responde de corrido; obligarlo a resolver y verificar
+// antes de redactar es lo que corrige eso. El razonamiento es interno: lo que se
+// publica es el desarrollo ya ordenado, no los tanteos.
+const MATH_RIGOR_RULES = `RIGOR MATEMÁTICO (regla de máxima prioridad)
+1. Antes de escribir nada, razona paso a paso: plantea el problema, resuélvelo completo y COMPRUEBA cada operación por separado —sumas, restas, multiplicaciones, divisiones, potencias, raíces, signos, paréntesis, fracciones, porcentajes, tasas y unidades—. No des por buena una cuenta "a ojo" ni de memoria, por simple que parezca: los errores caros son los de las cuentas fáciles.
+2. Comprueba cada resultado con una verificación independiente, distinta del camino con el que lo obtuviste: reemplaza la solución en la ecuación o en la condición original, evalúa la derivada en el punto, suma la columna al revés, revisa el orden de magnitud, y confirma que las unidades calzan y que el signo tiene sentido económico.
+3. Nunca publiques una cifra que no hayas comprobado. Si un cálculo no cuadra, rehazlo desde el planteamiento antes de responder; si aun así no cierra, dilo explícitamente en vez de inventar un número que se vea razonable.
+4. Los redondeos se declaran y se hacen al final, nunca en los pasos intermedios. Arrastra los decimales mientras calculas.
+5. En álgebra, verifica cada paso del despeje: qué se hizo a los dos lados, qué pasó con los signos al mover un término, qué restricciones impone dividir por una expresión que podría ser cero.
+6. Ese razonamiento es interno y previo. En tu respuesta va el desarrollo pedagógico ya limpio: nunca tus tanteos, tus dudas ni los intentos que descartaste.`;
+
+// Variante para los modos que devuelven JSON: ahí el razonamiento previo no
+// puede filtrarse a la salida ni siquiera como comentario.
+const MATH_RIGOR_RULES_JSON = `${MATH_RIGOR_RULES}
+7. Ese razonamiento no se escribe en ninguna parte de la respuesta: la salida sigue siendo únicamente el JSON pedido, sin una sola línea fuera de él.`;
+
+// Lo que hay que hacer ANTES de decirle a un alumno que se equivocó. El modelo,
+// suelto, corrige contra el procedimiento que él habría usado y da por malo un
+// desarrollo válido nada más porque tomó otro camino.
+const METHOD_FLEXIBILITY_RULES = `MÉTODOS ALTERNATIVOS (obligatorio antes de corregir)
+1. Acepta CUALQUIER procedimiento matemáticamente válido, aunque no sea el que tú habrías usado ni el que aparece en el apunte: otra sustitución en una integral, partes en vez de sustitución, igualación en vez de reducción en un sistema de ecuaciones, una demostración por contradicción en vez de una directa, una tabla en vez de una fórmula cerrada, el dual en vez del primal, la elasticidad por la derivada o por variaciones porcentuales, el VAN por flujos descontados uno a uno o por la fórmula de la anualidad.
+2. Antes de marcar algo como incorrecto, rehaz TÚ el desarrollo del alumno paso a paso y comprueba si llega al resultado correcto. Solo es incorrecto si hay un error real: un paso que no se sigue del anterior, una regla mal aplicada, un supuesto falso, un dato mal leído o una operación mal hecha. "No es como yo lo haría" NO es un error.
+3. Si el método es válido pero más largo o más frágil, dilo en ese orden: primero confirma que está bien, y recién después ofrece el camino corto como mejora, nunca como corrección.
+4. Si el procedimiento es correcto y solo falla la aritmética, dilo con esa precisión: el método está bien, el número no. No anules un desarrollo completo por un error de cálculo, ni des por bueno un método equivocado porque el número calzó de casualidad.
+5. Si no logras seguir el camino que tomó el alumno, pregúntale qué hizo en ese paso antes de calificarlo. Nunca declares incorrecto lo que no entendiste.
+6. Vale lo mismo para la interpretación: si el alumno explica el resultado con otras palabras pero dice lo correcto, es correcto.`;
+
+// Las tres figuras que el frontend sabe dibujar. La sintaxis de aquí es la misma
+// que parsea `chatMarkdownToHtml` en app.js: si se cambia una, hay que cambiar la
+// otra o el bloque se muestra como texto suelto.
+const VISUAL_SUPPORT_RULES = `APOYO VISUAL (gráficos y diagramas)
+Un gráfico bien puesto enseña más que tres párrafos, y hay materia que sin dibujo no se entiende. Cuando el contenido lo pida —funciones y sus formas, límites y asíntotas, máximos y mínimos, curvas de costo o de utilidad, oferta y demanda, equilibrios y desplazamientos, excedentes, restricciones presupuestarias, nubes de puntos y regresiones, distribuciones, árboles de decisión, procesos, clasificaciones o cualquier comparación de casos— acompaña la explicación con UNA figura. Y solo cuando lo pida: nada de figuras de adorno, y nunca más de dos en un mismo mensaje.
+
+Tienes dos bloques de figura y las tablas de siempre. Los bloques van con sus cercas de tres tildes, cada cerca sola en su línea, y la palabra que sigue a la cerca de apertura es exactamente la que se muestra aquí.
+
+1) GRÁFICO CON EJES — funciones, curvas, rectas, barras y nubes de puntos:
+${FENCE}grafico
+titulo: Equilibrio de mercado
+x: Cantidad (Q)
+y: Precio (\$)
+recta: Demanda | 0,100 | 50,0
+recta: Oferta | 0,20 | 50,70
+curva: Costo medio | y = 20 + 0.05*x^2 | 5..50
+punto: Equilibrio | 33,34
+vertical: Q* | 33
+horizontal: P* | 34
+nota: Sobre P* y bajo la demanda queda el excedente del consumidor.
+${FENCE}
+- "recta" traza un segmento entre dos puntos escritos "x,y". "curva" evalúa una función de x en el rango "desde..hasta" y admite + - * / ^ ( ) y las funciones raiz(), abs(), ln(), log(), exp(), sen(), cos(), tan().
+- "punto" marca un punto con su etiqueta; "vertical" y "horizontal" trazan las líneas de referencia hasta él.
+- Para barras: primera línea "tipo: barras" y después líneas "barra: etiqueta | valor". Para una nube de puntos: "tipo: dispersion" y líneas "punto: x,y".
+- Los números van con punto decimal (3.5, nunca 3,5): la coma separa la x de la y. Sin unidades ni símbolos pegados al número; esos van en las etiquetas de los ejes.
+- Los ejes se escalan solos a partir de los datos: no inventes escalas ni dibujes las flechas de los ejes.
+
+2) DIAGRAMA DE FLUJO O ÁRBOL DE DECISIÓN:
+${FENCE}mermaid
+flowchart TD
+A[Sube el costo del insumo] --> B{¿La demanda es elástica?}
+B -->|Sí| C[El precio sube poco y cae la cantidad]
+B -->|No| D[El precio sube casi todo el costo]
+${FENCE}
+- Solo "flowchart TD" (de arriba abajo) o "flowchart LR" (de izquierda a derecha), en la primera línea.
+- Nodos: A[proceso], B{decisión}, C(inicio o término). Flechas: "A --> B", o "A -->|etiqueta| B".
+- Máximo 10 nodos y etiquetas de pocas palabras: un diagrama que no se lee de una mirada no sirve de nada.
+
+3) TABLAS — markdown normal con barras verticales, para comparar casos, ordenar datos o mostrar un desarrollo columna a columna:
+| Caso | Precio | Cantidad |
+| --- | --- | --- |
+| Antes | 100 | 40 |
+| Después | 120 | 32 |
+
+Reglas de las tres: la figura acompaña al texto, no lo reemplaza —di en una línea qué hay que mirar en ella—, y todo dato que aparezca en la figura tiene que ser el mismo que usaste en el desarrollo. Si el tema no pide figura, no la pongas: el texto solo también es una respuesta correcta.`;
+
+// Lo que evita el otro sesgo de las alternativas: el alumno que descubre que la
+// correcta es siempre la más larga o la más precisa deja de leer las demás.
+const OPTION_ORDER_RULES = `ORDEN Y FORMA DE LAS ALTERNATIVAS
+El servidor baraja las alternativas antes de mostrárselas al alumno: la posición en la que tú escribas la correcta NO es la que él va a ver. De ahí salen tres exigencias:
+1. Ninguna alternativa puede referirse a otra por su posición. Nada de "ninguna de las anteriores", "todas las anteriores", "la a y la b" ni "la primera opción".
+2. Todas las alternativas tienen que ser intercambiables de lugar: mismo largo aproximado, misma forma gramatical, mismo nivel de detalle y de precisión. Una correcta más larga, más matizada o mejor redactada que el resto se delata sola y el alumno la marca sin saber la materia.
+3. Los distractores tienen que ser defendibles: cada uno es el resultado de un error concreto y frecuente del ramo, no una opción absurda de relleno.
+Escribe la correcta donde quieras y apunta "correctIndex" a la posición real que le diste dentro del arreglo.`;
 
 const SYSTEM_PROMPT = `Eres un asistente pedagógico experto en la malla de Ingeniería Comercial de la Pontificia Universidad Católica de Chile. Analizas textos de controles, pruebas y exámenes pasados para extraer los temas disciplinares reales y construir con ellos un mini test de diagnóstico exprés.
 
@@ -487,7 +590,8 @@ CÓMO RESPONDES
 
 FORMATO
 - Escribe en español de Chile, en markdown MUY simple: párrafos cortos, **negritas** para lo clave, listas con "- " y numeradas con "1. " cuando haya pasos.
-- Nada de encabezados de nivel, tablas, bloques de código ni LaTeX: las fórmulas van en línea y en texto plano (por ejemplo: VAN = -I0 + Σ FCt / (1+r)^t).
+- Nada de encabezados de nivel ni de LaTeX: las fórmulas van en línea y en texto plano (por ejemplo: VAN = -I0 + Σ FCt / (1+r)^t).
+- Las tablas y los dos bloques de figura de APOYO VISUAL sí se usan, con la sintaxis exacta que se describe ahí. Fuera de esos bloques no escribas código.
 - No uses listas anidadas.
 
 SEGURIDAD
@@ -586,7 +690,8 @@ REGLAS DE TODA LA SESIÓN
 
 FORMATO
 - Escribe en español de Chile, en markdown MUY simple: párrafos cortos, **negritas** para lo clave, listas con "- " y numeradas con "1. " cuando haya pasos.
-- Nada de encabezados de nivel, tablas, bloques de código ni LaTeX: las fórmulas van en línea y en texto plano (por ejemplo: VAN = -I0 + Σ FCt / (1+r)^t).
+- Nada de encabezados de nivel ni de LaTeX: las fórmulas van en línea y en texto plano (por ejemplo: VAN = -I0 + Σ FCt / (1+r)^t).
+- Las tablas y los dos bloques de figura de APOYO VISUAL sí se usan, con la sintaxis exacta que se describe ahí. Fuera de esos bloques no escribas código.
 - No uses listas anidadas.
 
 SEGURIDAD
@@ -740,7 +845,7 @@ function buildPrompt(payload){
   }
 
   return {
-    system: SYSTEM_PROMPT,
+    system: `${SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${OPTION_ORDER_RULES}`,
     schema: OUTPUT_SCHEMA,
     maxTokens: 4096,
     prompt: `Ramo: ${curso}\nTipo de evaluación: ${tipo}\n\n` +
@@ -770,7 +875,7 @@ function buildPracticePrompt(payload){
   ].filter(Boolean).join('\n');
 
   return {
-    system: PRACTICE_SYSTEM_PROMPT,
+    system: `${PRACTICE_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${OPTION_ORDER_RULES}`,
     schema: PRACTICE_OUTPUT_SCHEMA,
     maxTokens: 6000,
     prompt: `${contexto}\n\n` +
@@ -802,7 +907,7 @@ function buildFlashcardsPrompt(payload){
   ].filter(Boolean).join('\n');
 
   return {
-    system: FLASHCARDS_SYSTEM_PROMPT,
+    system: `${FLASHCARDS_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}`,
     schema: FLASHCARDS_OUTPUT_SCHEMA,
     maxTokens: 3000,
     prompt: `${contexto}\n\n` +
@@ -833,7 +938,7 @@ function buildFeynmanPrompt(payload){
   ].filter(Boolean).join('\n');
 
   return {
-    system: FEYNMAN_SYSTEM_PROMPT,
+    system: `${FEYNMAN_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}`,
     schema: FEYNMAN_OUTPUT_SCHEMA,
     maxTokens: 3000,
     prompt: `${contexto}\n\n` +
@@ -897,12 +1002,15 @@ function buildTopicChatPrompt(payload){
   const history = normalizeHistory(payload.history, {
     maxTurns: MAX_CHAT_HISTORY_TURNS,
     maxChars: MAX_CHAT_HISTORY_CHARS,
-    maxMessageChars: MAX_CHAT_MESSAGE_CHARS
+    maxMessageChars: MAX_CHAT_MESSAGE_CHARS,
+    maxAssistantChars: MAX_CHAT_HISTORY_IA_CHARS
   });
 
   return {
-    system: `${TOPIC_CHAT_SYSTEM_PROMPT}\n\n${contexto}`,
-    maxTokens: 1400,
+    system: `${TOPIC_CHAT_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${VISUAL_SUPPORT_RULES}\n\n${contexto}`,
+    // Comprobar la aritmética y dibujar una figura ocupan líneas que antes no
+    // existían: con 1400 la respuesta llegaba cortada justo en el gráfico.
+    maxTokens: 1900,
     messages: mergeTurns([...history, { role: 'user', content: userMessage }])
   };
 }
@@ -922,7 +1030,12 @@ function normalizeHistory(rawList, limits){
                : (item.role === 'user' || item.role === 'alumno') ? 'user'
                : null;
     if(!role) continue;
-    const content = cleanText(item.content != null ? item.content : item.text, limits.maxMessageChars);
+    // El turno del alumno y el del profesor no miden lo mismo, y el del profesor
+    // puede traer una figura que no se puede aplastar.
+    const cap = role === 'assistant' && limits.maxAssistantChars
+      ? limits.maxAssistantChars : limits.maxMessageChars;
+    const clean = role === 'assistant' ? cleanRichText : cleanText;
+    const content = clean(item.content != null ? item.content : item.text, cap);
     if(!content) continue;
     if(chars + content.length > limits.maxChars) break;
     chars += content.length;
@@ -1033,7 +1146,8 @@ function buildStudySessionPrompt(payload){
   const history = normalizeHistory(payload.history, {
     maxTurns: MAX_SESSION_HISTORY_TURNS,
     maxChars: MAX_SESSION_HISTORY_CHARS,
-    maxMessageChars: MAX_SESSION_MESSAGE_CHARS
+    maxMessageChars: MAX_SESSION_MESSAGE_CHARS,
+    maxAssistantChars: MAX_SESSION_HISTORY_IA_CHARS
   });
 
   // Sin respuesta del alumno el turno es la apertura de la fase: la pide la
@@ -1041,8 +1155,10 @@ function buildStudySessionPrompt(payload){
   const turn = userResponse || SESSION_PHASE_OPENERS[phase];
 
   return {
-    system: `${SESSION_SYSTEM_PROMPT}\n\n${contexto}`,
-    maxTokens: 2000,
+    system: `${SESSION_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${VISUAL_SUPPORT_RULES}\n\n${contexto}`,
+    // Ver el comentario del chat: el desarrollo comprobado y la figura no caben
+    // en el tope anterior, y una clase cortada a la mitad se nota mucho más.
+    maxTokens: 2800,
     phase,
     sessionIndex,
     totalSessions,
@@ -1083,12 +1199,18 @@ function readSessionAdvance(raw, phase){
   // Sin marca: solo se mira el cierre del mensaje, que es donde se termina una
   // fase. Un "en la fase 2 vamos a ver esto" en medio de la explicación es una
   // promesa, no un cambio de fase, y no tiene por qué gatillarlo.
-  const tail = clean
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .slice(-SESSION_ADVANCE_PROSE_LINES)
-    .join('\n');
+  // Las líneas de una figura no son prosa: si el mensaje cierra con un gráfico,
+  // las últimas tres líneas serían "punto: 33,34" y la cerca, y el respaldo se
+  // quedaría ciego justo en el turno que cambia de fase.
+  const fuera = [];
+  let dentroDeCerca = false;
+  for(const line of clean.split('\n')){
+    if(/^\s*```/.test(line)){ dentroDeCerca = !dentroDeCerca; continue; }
+    if(dentroDeCerca) continue;
+    const t = line.trim();
+    if(t) fuera.push(t);
+  }
+  const tail = fuera.slice(-SESSION_ADVANCE_PROSE_LINES).join('\n');
   const prose = tail.match(SESSION_ADVANCE_PROSE_RE);
   if(!prose) return { text: clean, nextPhase: null };
 
@@ -1161,7 +1283,7 @@ function buildExamPrompt(payload){
   ].filter(Boolean).join('\n');
 
   return {
-    system: EXAM_SYSTEM_PROMPT,
+    system: `${EXAM_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${OPTION_ORDER_RULES}`,
     schema: EXAM_OUTPUT_SCHEMA,
     maxTokens: 8000,
     topics,
@@ -1280,6 +1402,43 @@ function cleanText(value, maxChars){
   return text.length > maxChars ? text.slice(0, maxChars).trim() : text;
 }
 
+// Igual que cleanText, pero conserva los bloques con cerca de tres tildes tal
+// como los escribió el modelo. Es lo que hace posibles los gráficos y diagramas
+// de la clase guiada y del chat: cleanText borra las cercas y aplasta los
+// espacios repetidos, que es justo lo que le da forma a una figura.
+//
+// Fuera de las cercas se comporta igual que cleanText. Dentro, solo se sacan los
+// caracteres de control y se normalizan los tabuladores.
+function cleanRichText(value, maxChars){
+  const lines = String(value == null ? '' : value)
+    .replace(/\r\n?/g, '\n')
+    .replace(CONTROL_CHARS, '')
+    .split('\n');
+
+  const out = [];
+  let inFence = false;
+  for(const line of lines){
+    if(/^\s*```/.test(line)){
+      inFence = !inFence;
+      out.push(line.trim());
+      continue;
+    }
+    out.push(inFence ? line.replace(/\t/g, '  ').replace(/\s+$/, '')
+                     : line.replace(/[ \t]+/g, ' '));
+  }
+
+  // Tres saltos seguidos se juntan en dos también dentro de la cerca: ninguna de
+  // las figuras que entiende el frontend usa líneas en blanco como dato.
+  let text = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  if(text.length > maxChars) text = text.slice(0, maxChars).trim();
+
+  // Si el corte por largo dejó una cerca sin cerrar, se cierra: media figura no
+  // se dibuja, pero una cerca abierta se come todo el resto del mensaje.
+  const fences = (text.match(/^\s*```/gm) || []).length;
+  if(fences % 2 === 1) text += '\n```';
+  return text;
+}
+
 // Entero acotado: lo que venga fuera de rango (o no sea número) cae al valor por
 // defecto en vez de propagarse al prompt.
 function clampInt(value, min, max, fallback){
@@ -1298,6 +1457,28 @@ function isDontKnow(option){
   const norm = normalizeTxt(option);
   return norm.includes('no lo se') || norm.includes('no se') ||
          norm.includes('tengo dudas') || norm.includes('no estoy seguro');
+}
+
+// Baraja las alternativas y devuelve dónde quedó la correcta.
+//
+// El modelo escribe SIEMPRE la correcta primero: es lo que muestra el ejemplo de
+// cada prompt y es lo que hace igual cuando no se le dice nada. Sin esto la
+// respuesta del diagnóstico es siempre la "a", el alumno lo nota a la segunda
+// pregunta y el test deja de medir lo que sabe. Se baraja aquí, en el Worker, y
+// no al pintar: el índice correcto viaja con las alternativas ya mezcladas, así
+// que corregir sigue siendo la comparación de siempre.
+//
+// Fisher-Yates sobre los índices, para no perder de vista cuál era la correcta.
+function shuffleWithCorrect(options, correctIndex){
+  const order = options.map((_, i) => i);
+  for(let i = order.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+  }
+  return {
+    options: order.map(i => options[i]),
+    correctIndex: order.indexOf(correctIndex)
+  };
 }
 
 // Devuelve { options, correctIndex } o null si la pregunta no es utilizable.
@@ -1327,9 +1508,13 @@ function normalizeOptions(rawOptions, rawCorrectIndex){
   const newCorrect = trimmed.findIndex(o => o.originalIndex === correctIndex);
   if(newCorrect === -1) return null;          // la correcta se cayó o el índice no existe
 
+  // Se barajan solo las alternativas reales: "No lo sé" es la salida del alumno
+  // que no sabe y tiene que quedar siempre al final, no repartida entre medio.
+  const mixed = shuffleWithCorrect(trimmed.map(o => o.text), newCorrect);
+
   return {
-    options: [...trimmed.map(o => o.text), DONT_KNOW_OPTION],
-    correctIndex: newCorrect
+    options: [...mixed.options, DONT_KNOW_OPTION],
+    correctIndex: mixed.correctIndex
   };
 }
 
@@ -1411,10 +1596,12 @@ function normalizeQuizItem(raw){
   const newCorrect = trimmed.findIndex(o => o.originalIndex === correctIndex);
   if(newCorrect === -1) return null;          // la correcta se cayó o el índice no existe
 
+  const mixed = shuffleWithCorrect(trimmed.map(o => o.text), newCorrect);
+
   return {
     pregunta,
-    alternativas: trimmed.map(o => o.text),
-    correctIndex: newCorrect,
+    alternativas: mixed.options,
+    correctIndex: mixed.correctIndex,
     explicacion: cleanText(raw.explicacion, MAX_EXPLICACION_CHARS)
   };
 }
@@ -1555,11 +1742,13 @@ function normalizeExamQuestion(raw, titlesByKey){
   const topicTitle = titlesByKey.get(normalizeTxt(rawTitle)) || rawTitle;
   if(!topicTitle) return null;
 
+  const mixed = shuffleWithCorrect(trimmed.map(o => o.text), newCorrect);
+
   return {
     topicTitle,
     question,
-    options: trimmed.map(o => o.text),
-    correctIndex: newCorrect,
+    options: mixed.options,
+    correctIndex: mixed.correctIndex,
     explanation: cleanText(raw.explanation, MAX_EXAM_EXPLANATION_CHARS)
   };
 }
@@ -1944,7 +2133,7 @@ function buildStudyGuidePrompt(payload){
   ].filter(v => v !== null).join('\n');
 
   return {
-    system: `${GUIDE_SYSTEM_PROMPT}\n\n${contexto}`,
+    system: `${GUIDE_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${contexto}`,
     schema: GUIDE_OUTPUT_SCHEMA,
     maxTokens: 8000,
     stage: 'ejercicios',
@@ -1986,7 +2175,7 @@ function buildStudyGuidePautaPrompt(payload){
   ].join('\n');
 
   return {
-    system: `${GUIDE_PAUTA_SYSTEM_PROMPT}\n\n${contexto}`,
+    system: `${GUIDE_PAUTA_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES_JSON}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${contexto}`,
     schema: GUIDE_PAUTA_OUTPUT_SCHEMA,
     // Treinta desarrollos paso a paso más sus criterios rondan los 10.000 tokens,
     // y con 12.000 la pauta se cortaba de a ratos: el modelo se pasaba de largo en
@@ -2562,7 +2751,7 @@ export default {
       const attempt = await generateText(env.ANTHROPIC_API_KEY, built, mode);
       if(attempt.message) return fail(attempt.message, attempt.status, origin);
 
-      const reply = cleanText(attempt.text, MAX_CHAT_REPLY_CHARS);
+      const reply = cleanRichText(attempt.text, MAX_CHAT_REPLY_CHARS);
       if(!reply) return fail('No se recibió respuesta. Vuelve a preguntar.', 502, origin);
 
       // Se compara contra el tope, no contra el largo del texto crudo: cleanText
@@ -2595,7 +2784,7 @@ export default {
       const advance = readSessionAdvance(raw.replace(SESSION_VERDICT_RE, ''), built.phase);
       const nextPhase = verdict ? null : advance.nextPhase;
 
-      let reply = cleanText(advance.text, MAX_SESSION_REPLY_CHARS);
+      let reply = cleanRichText(advance.text, MAX_SESSION_REPLY_CHARS);
       // Un mensaje que era solo una línea de control queda vacío al sacarla. No es
       // un error —la fase sí se cerró—, así que se publica el texto mínimo en vez
       // de devolverle un fallo al alumno justo en el cambio de fase.

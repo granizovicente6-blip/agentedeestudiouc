@@ -2014,6 +2014,144 @@ body.modal-open{overflow:hidden;}
 .chat-list li{margin-bottom:5px;}
 .chat-list li:last-child{margin-bottom:0;}
 
+/* --- Figuras: gráficos, diagramas, tablas y bloques de texto ----------------
+   El SVG lo arma app.js con estas clases y sin un solo color adentro: la paleta
+   entra por variables, así que la misma figura se pinta sobre el papel claro del
+   chat y sobre la pizarra oscura de la clase guiada sin generarla dos veces.
+   Los valores de aquí son los del chat; la clase guiada los reemplaza más abajo.
+   -------------------------------------------------------------------------- */
+.chat-bubble, .session-bubble{
+  --dg-ink:var(--ink);
+  --dg-soft:var(--ink-soft);
+  --dg-line:var(--line);
+  --dg-grid:rgba(22,34,63,0.10);
+  --dg-plot:var(--paper);
+  --dg-node:var(--blue-soft);
+  --dg-node-line:var(--blue);
+  --dg-chip:var(--paper-card);
+  --dg-s1:var(--blue);
+  --dg-s2:var(--gold);
+  --dg-s3:var(--lvl-bajo);
+  --dg-s4:var(--lvl-alto);
+}
+
+.chat-figure{
+  margin:0 0 12px;
+  padding:10px 10px 8px;
+  border:1px solid var(--dg-line);
+  background:var(--dg-plot);
+  /* Un gráfico ancho se desplaza dentro de su marco: la burbuja nunca crece de
+     más ni empuja una barra horizontal al modal completo. */
+  max-width:100%;
+  overflow-x:auto;
+  overflow-y:hidden;
+}
+.chat-figure:last-child{margin-bottom:0;}
+.chat-figure figcaption{
+  margin-top:8px; padding-top:7px;
+  border-top:1px dashed var(--dg-line);
+  font-size:12.5px; line-height:1.5;
+  color:var(--dg-soft);
+}
+/* Ancho tope: estirada más allá de esto la figura no gana información, solo
+   cifras de eje más grandes que el texto que las explica. */
+.dg-svg{display:block; width:100%; max-width:760px; height:auto; margin-inline:auto;}
+/* El diagrama de flujo se dibuja a su tamaño natural: estirarlo hasta el ancho
+   de la burbuja deja tres cajas gigantes y un texto diminuto adentro. */
+.dg-svg-flow{margin-inline:auto;}
+
+/* Ejes, grilla y rótulos. */
+.dg-title{
+  font-family:'Source Serif 4',serif;
+  font-size:15px; font-weight:700; fill:var(--dg-ink);
+}
+.dg-plot{fill:none; stroke:var(--dg-line); stroke-width:1;}
+.dg-grid{stroke:var(--dg-grid); stroke-width:1;}
+.dg-zero{stroke:var(--dg-soft); stroke-width:1.2;}
+.dg-tick{
+  font-family:'JetBrains Mono',monospace;
+  font-size:12px; fill:var(--dg-soft);
+}
+.dg-axis-label{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11.5px; letter-spacing:.05em; fill:var(--dg-soft);
+}
+
+/* Series, guías y puntos destacados. */
+.dg-serie{fill:none; stroke-width:2.2; stroke-linejoin:round; stroke-linecap:round;}
+.dg-guide{stroke:var(--dg-soft); stroke-width:1.1; stroke-dasharray:4 4;}
+.dg-guide-text{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; fill:var(--dg-soft);
+}
+.dg-point{fill:var(--dg-s2); stroke:var(--dg-plot); stroke-width:1.6;}
+.dg-dot{fill:var(--dg-s1); opacity:.75;}
+.dg-point-text{font-size:12px; font-weight:600; fill:var(--dg-ink);}
+.dg-bar{opacity:.88;}
+.dg-bar-value{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; fill:var(--dg-soft);
+}
+.dg-legend-line{stroke-width:2.6;}
+.dg-legend-text{font-size:12px; fill:var(--dg-ink);}
+
+/* Diagramas de flujo y árboles de decisión. */
+.dg-node{fill:var(--dg-node); stroke:var(--dg-node-line); stroke-width:1.4;}
+.dg-node-decision{fill:none; stroke:var(--dg-s2); stroke-width:1.6;}
+.dg-node-text{font-size:13px; fill:var(--dg-ink);}
+.dg-edge{stroke:var(--dg-soft); stroke-width:1.5;}
+.dg-arrow{fill:var(--dg-soft);}
+.dg-edge-chip{fill:var(--dg-chip); stroke:var(--dg-line); stroke-width:1;}
+.dg-edge-text{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; fill:var(--dg-ink);
+}
+
+/* Un mensaje con figura usa todo el ancho: una burbuja al 86% deja el gráfico
+   más chico de lo que se puede leer. */
+.chat-msg.is-ia:has(.chat-figure){max-width:98%;}
+
+/* En pantalla angosta un gráfico que se encoge hasta el ancho de la burbuja deja
+   las cifras de los ejes en cinco píxeles, que es lo mismo que no dibujarlo. Por
+   debajo de este ancho la figura deja de achicarse y se desplaza dentro de su
+   marco: el que se mueve es el marco, nunca la página. */
+@media (max-width:760px){
+  .dg-svg{min-width:520px;}
+}
+
+/* Tablas y bloques de texto con cerca. */
+.chat-table-wrap{margin:0 0 12px; max-width:100%; overflow-x:auto;}
+.chat-table-wrap:last-child{margin-bottom:0;}
+.chat-table{
+  border-collapse:collapse; width:100%;
+  font-size:13.5px; line-height:1.45;
+}
+.chat-table th, .chat-table td{
+  border:1px solid var(--dg-line);
+  padding:6px 9px; text-align:left; vertical-align:top;
+}
+.chat-table th{
+  font-family:'JetBrains Mono',monospace;
+  font-size:11px; letter-spacing:.06em; text-transform:uppercase;
+  font-weight:600; color:var(--dg-soft);
+  background:var(--dg-plot);
+}
+.chat-pre{
+  margin:0 0 12px; padding:10px 12px;
+  border:1px solid var(--dg-line);
+  background:var(--dg-plot);
+  overflow-x:auto;
+}
+.chat-pre:last-child{margin-bottom:0;}
+.chat-pre code{
+  display:block;
+  font-family:'JetBrains Mono',monospace;
+  font-size:12.5px; line-height:1.5;
+  white-space:pre;
+  background:none; border:none; padding:0;
+  color:var(--dg-ink);
+}
+
 /* Espera: tres puntos que laten mientras Claude escribe. */
 .chat-msg.is-pending .chat-bubble{display:flex; align-items:center; gap:10px;}
 .chat-thinking{font-size:13px; color:var(--ink-soft);}
@@ -2090,7 +2228,11 @@ body.modal-open{overflow:hidden;}
   .btn-topic-chat{width:100%; text-align:center;}
   .chat-body{padding:14px; gap:12px;}
   .chat-msg{max-width:94%;}
+  .chat-msg.is-ia:has(.chat-figure){max-width:100%;}
   .chat-bubble{font-size:14px;}
+  .chat-figure{padding:7px 7px 6px;}
+  .chat-table{font-size:12.5px;}
+  .chat-table th, .chat-table td{padding:5px 7px;}
   .chat-foot{padding:10px 14px 12px;}
   /* Los chips se leen enteros en una fila que se arrastra: apilarlos verticales
      se comería media pantalla del teclado abierto. */
@@ -2346,6 +2488,41 @@ body.modal-open{overflow:hidden;}
 .session-bubble .chat-list:last-child{margin-bottom:0;}
 .session-bubble .chat-list li{margin-bottom:6px;}
 .session-bubble .chat-list li:last-child{margin-bottom:0;}
+
+/* --- Las figuras sobre la pizarra ------------------------------------------
+   Solo cambia la paleta: el SVG es el mismo que dibuja el chat. Los contrastes
+   están medidos contra el panel oscuro (--focus-panel), no contra el fondo de la
+   sala, porque la figura vive dentro de la burbuja.
+   -------------------------------------------------------------------------- */
+.session-bubble{
+  --dg-ink:var(--focus-ink);
+  --dg-soft:var(--focus-soft);
+  --dg-line:var(--focus-line);
+  --dg-grid:rgba(255,255,255,0.09);
+  --dg-plot:rgba(0,0,0,0.26);
+  --dg-node:rgba(130,169,234,0.16);
+  --dg-node-line:var(--focus-blue);
+  --dg-chip:var(--focus-panel);
+  --dg-s1:var(--focus-blue);
+  --dg-s2:var(--focus-gold);
+  --dg-s3:var(--focus-green);
+  --dg-s4:var(--focus-red);
+}
+.session-bubble .chat-figure{
+  /* Sobre el panel ya oscuro, un marco más profundo separa la figura del texto
+     sin encender otra línea de borde. */
+  background:rgba(0,0,0,0.26);
+  border-color:var(--focus-line);
+}
+.session-bubble .dg-point{stroke:var(--focus-panel);}
+.session-bubble .dg-title{fill:var(--focus-gold);}
+.session-bubble .chat-table th{color:var(--focus-gold); background:rgba(0,0,0,0.3);}
+.session-bubble .chat-pre{background:rgba(0,0,0,0.3);}
+.session-bubble .chat-pre code{color:var(--focus-ink);}
+
+/* En la clase la figura es material de estudio, no un adorno al margen: el
+   mensaje que la trae ocupa la pizarra completa. */
+.session-msg.is-ia:has(.chat-figure){max-width:100%;}
 /* Los puntos de espera son los mismos del chat, pero sobre fondo oscuro. */
 .session-msg.is-pending .session-bubble{display:flex; align-items:center; gap:10px;}
 .session-msg.is-pending .chat-dots i{background:var(--focus-gold);}
