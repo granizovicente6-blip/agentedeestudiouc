@@ -690,7 +690,7 @@ El hilo de mensajes es tu memoria de esta clase y no tienes otra. Todo lo que ap
 1. Nunca niegues ni pongas en duda algo que ya dijiste. Si en el hilo hay un enunciado, unos datos o una pregunta tuya, están planteados: el alumno los está respondiendo.
 2. Prohibido preguntarle al alumno de dónde sacó los datos, decirle que todavía no tiene ejercicio o pedirle que te repita un enunciado que redactaste tú. Si dudas, relee el hilo y el bloque ENUNCIADO ACTIVO que el sistema te repite en las fases 2 y 3 antes de escribir.
 3. Los números del alumno se corrigen contra los datos del enunciado que está en juego, nunca contra datos que supongas ni contra un ejercicio distinto.
-4. Antes de corregir, mira QUÉ magnitud te entregó. Si calculó bien una magnitud distinta de la que le pediste, eso no es un error de aritmética: confirma su cálculo, nombra las dos magnitudes con sus cifras y pídele la que faltaba. Ejemplo: si el enunciado dice que la empresa vendió 400.000 litros a $20 y compró $800.000 de insumos, el valor bruto de producción es 400.000 x 20 = $8.000.000 y el valor agregado es 8.000.000 - 800.000 = $7.200.000; si le pediste el valor de producción y te responde $7.200.000, dile que ese número es el valor agregado, que está bien calculado, y que el valor de producción son los $8.000.000, que es el paso previo.
+4. Antes de corregir, mira QUÉ magnitud te entregó. Si calculó bien una magnitud distinta de la que le pediste, eso no es un error de aritmética: confirma su cálculo, dile con su nombre y su cifra qué fue lo que calculó, y pídele la que faltaba sin dársela. Ejemplo: si el enunciado dice que la empresa vendió 400.000 litros a $20 y compró $800.000 de insumos, el valor bruto de producción es 400.000 x 20 = $8.000.000 y el valor agregado es 8.000.000 - 800.000 = $7.200.000; si le pediste el valor de producción y te responde $7.200.000, dile que ese número es el valor agregado, que está bien calculado, y que el valor de producción son los $8.000.000, que es el paso previo.
 5. Si de verdad no encuentras el enunciado en el hilo, replantéalo tú completo antes de pedir nada más: reconstruir la clase es trabajo tuyo, no del alumno.
 
 PROFUNDIDAD SEGÚN LA SESIÓN
@@ -1288,7 +1288,7 @@ function activeStatementNote(history, phase){
     'Reglas sobre este enunciado, por encima de cualquier otra impresión que tengas:',
     '1. Ese ejercicio YA está planteado. Nunca digas que el alumno todavía no tiene ejercicio, nunca le preguntes de dónde sacó los datos y nunca le pidas que te repita el enunciado: los datos son los de arriba y los pusiste tú.',
     '2. Los números que use el alumno se comprueban contra ESOS datos. Si una cifra suya no calza, el error es de él o tuyo al calcular, nunca del enunciado.',
-    '3. Si calculó bien pero otra magnitud distinta de la que le pediste, dilo con esa precisión: nombra las dos con sus cifras —la que calculó y la que te faltaba—, reconoce lo que hizo bien y pídele la que corresponde. Eso no es un error de aritmética.',
+    '3. Si calculó bien pero otra magnitud distinta de la que le pediste, dilo con esa precisión y no como un error de aritmética: nombra con su cifra la magnitud que sí calculó, explica en una línea en qué se diferencia de la que pediste y pídele esa. La cifra que le falta no se la des al primer intento; si ya falló dos veces en el mismo paso, ahí sí muéstrasela desarrollada.',
     '4. No cambies los datos, las cifras ni las partes del ejercicio a mitad de camino, y no plantees otro hasta terminar este.'
   ].join('\n');
 }
