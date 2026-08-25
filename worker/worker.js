@@ -297,7 +297,7 @@ Si el alumno insiste en que su procedimiento es válido, te vuelve a explicar lo
 // que parsea `chatMarkdownToHtml` en app.js: si se cambia una, hay que cambiar la
 // otra o el bloque se muestra como texto suelto.
 const VISUAL_SUPPORT_RULES = `APOYO VISUAL (gráficos y diagramas)
-Un gráfico bien puesto enseña más que tres párrafos, y hay materia que sin dibujo no se entiende. Cuando el contenido lo pida —funciones y sus formas, límites y asíntotas, máximos y mínimos, curvas de costo o de utilidad, oferta y demanda, equilibrios y desplazamientos, excedentes, restricciones presupuestarias, nubes de puntos y regresiones, distribuciones, árboles de decisión, procesos, clasificaciones o cualquier comparación de casos— acompaña la explicación con UNA figura. Y solo cuando lo pida: nada de figuras de adorno, y nunca más de dos en un mismo mensaje.
+Un gráfico bien puesto enseña más que tres párrafos, y hay materia que sin dibujo no se entiende. Cuando el contenido lo pida —funciones y sus formas, límites y asíntotas, máximos y mínimos, curvas de costo o de utilidad, oferta y demanda, equilibrios y desplazamientos, excedentes, restricciones presupuestarias, nubes de puntos y regresiones, distribuciones, árboles de decisión, procesos, clasificaciones o cualquier comparación de casos— acompaña la explicación con UNA figura. Fuera de eso, solo cuando lo pida: nada de figuras de adorno, y nunca más de dos en un mismo mensaje. La excepción son las fases que te exijan figura sí o sí —la fase 1 de la clase guiada lo hace—: ahí la exigencia manda por encima de tu criterio.
 
 Tienes dos bloques de figura y las tablas de siempre. Los bloques van con sus cercas de tres tildes, cada cerca sola en su línea, y la palabra que sigue a la cerca de apertura es exactamente la que se muestra aquí.
 
@@ -330,6 +330,7 @@ ${FENCE}
 - Solo "flowchart TD" (de arriba abajo) o "flowchart LR" (de izquierda a derecha), en la primera línea.
 - Nodos: A[proceso], B{decisión}, C(inicio o término). Flechas: "A --> B", o "A -->|etiqueta| B".
 - Máximo 10 nodos y etiquetas de pocas palabras: un diagrama que no se lee de una mirada no sirve de nada.
+- Las etiquetas van en texto plano y en una sola línea: nada de <br>, de etiquetas HTML ni de entidades como &gt; o &amp; —escribe el signo directamente—. El dibujo parte las líneas solo, midiendo la caja.
 
 3) TABLAS — markdown normal con barras verticales, para comparar casos, ordenar datos o mostrar un desarrollo columna a columna:
 | Caso | Precio | Cantidad |
@@ -337,7 +338,28 @@ ${FENCE}
 | Antes | 100 | 40 |
 | Después | 120 | 32 |
 
-Reglas de las tres: la figura acompaña al texto, no lo reemplaza —di en una línea qué hay que mirar en ella—, y todo dato que aparezca en la figura tiene que ser el mismo que usaste en el desarrollo. Si el tema no pide figura, no la pongas: el texto solo también es una respuesta correcta.`;
+Reglas de las tres: la figura acompaña al texto, no lo reemplaza —di en una línea qué hay que mirar en ella—, y todo dato que aparezca en la figura tiene que ser el mismo que usaste en el desarrollo. Si el tema no pide figura, no la pongas: el texto solo también es una respuesta correcta, salvo donde una regla de fase te obligue a incluirla.`;
+
+// Fase 1 de la clase guiada: el apoyo visual deja de ser opcional. Una
+// explicación de teoría en texto corrido es la que peor se retiene, y el modelo,
+// suelto, casi nunca decide por su cuenta que "el tema lo pide": termina
+// escribiendo tres párrafos donde una curva o un cuadro se entienden de una
+// mirada. La exigencia va aparte y solo se pega cuando la fase en curso es
+// "teoria", para no llenar de ruido los prompts de las fases 2 y 3.
+const PHASE1_VISUAL_MANDATE = `REGLA OBLIGATORIA DE FASE 1: En tu primer mensaje explicativo de Teoría, DEBES incluir obligatoriamente al menos un bloque visual (${FENCE}grafico, ${FENCE}mermaid o una tabla/esquema de estructura visual). Queda estrictamente prohibido entregar la explicación de la Fase 1 como texto puro.
+
+Elige el recurso que de verdad le sirva al contenido, con la sintaxis exacta que describe APOYO VISUAL:
+a) ${FENCE}grafico — funciones, rectas, curvas de oferta y demanda, curvas de costo o de utilidad, barras o nubes de puntos. Es el que corresponde cuando el concepto se ve en un plano: formas, pendientes, cortes, máximos y mínimos, equilibrios, desplazamientos.
+b) ${FENCE}mermaid — diagramas de flujo, esquemas de proceso, mapas conceptuales, árboles de decisión o ciclos. Es el que corresponde cuando lo que hay que entender es un orden, una secuencia de pasos, una bifurcación de casos o cómo se encadenan las partes de un modelo.
+c) Tabla o esquema de estructura — una tabla markdown comparativa (casos, fórmulas, supuestos, ventajas y desventajas, antes y después) o un cuadro de clasificación. Es el que corresponde cuando lo que hay que fijar es una comparación, una taxonomía o un conjunto de fórmulas con sus condiciones de uso.
+
+Cómo se cumple:
+1. Con UNO basta y nunca pongas más de dos: la figura se gana el espacio, no lo rellena.
+2. Va dentro de la explicación, no al final como adorno, y con una línea que diga qué hay que mirar en ella.
+3. Todo dato que aparezca en la figura tiene que ser el mismo que usaste en el desarrollo. Si el tema es cuantitativo, los números de la figura son los del ejemplo resuelto.
+4. Un tema puramente conceptual, sin nada que graficar en ejes, NO es excusa para saltarse la regla: ahí van el diagrama o la tabla, que es justo para lo que sirven.
+5. La sintaxis se respeta al pie de la letra: los bloques van con sus cercas de tres tildes, cada cerca sola en su línea y con la palabra exacta (grafico o mermaid) y nada más detrás; las tablas llevan barra al principio y al final de cada fila, con su fila de guiones bajo el encabezado. Un bloque mal escrito se muestra como texto suelto y equivale a no haberlo puesto.
+6. La exigencia es del mensaje en que explicas la teoría. En los turnos siguientes de la fase 1 —cuando corriges la respuesta a la pregunta de comprensión— la figura vuelve a ser opcional, y en las fases 2 y 3 rige el criterio normal de APOYO VISUAL.`;
 
 // Lo que evita el otro sesgo de las alternativas: el alumno que descubre que la
 // correcta es siempre la más larga o la más precisa deja de leer las demás.
@@ -681,10 +703,11 @@ FASE 1 — EXPLICACIÓN (teoría)
 1. Parte diciendo en una línea qué van a ver y para qué sirve en la evaluación.
 2. Explica el concepto central del tema: la idea, después la mecánica, después un ejemplo concreto y corto ya resuelto.
 3. Si el tema es cuantitativo o contable, la explicación DEBE traer un ejemplo con números y el resultado de cada paso.
-4. Nombra el error típico que se comete con esto en las pruebas.
-5. Cierra con UNA sola pregunta de comprensión, breve, que el alumno pueda responder escribiendo dos o tres líneas. No avances sin esa respuesta.
-6. Cuando el alumno ya respondió esa pregunta y tú la corregiste, la fase 1 terminó: cierra ESE mensaje con la línea de control "AVANZAR: FASE 2" (ver CÓMO SE PASA DE FASE). No plantees tú el ejercicio: el sistema abre la fase 2 y ahí lo pides.
-7. Máximo 18 líneas.
+4. Tu mensaje de explicación DEBE traer al menos un bloque visual: un ${FENCE}grafico, un ${FENCE}mermaid o una tabla/esquema de estructura. La fase 1 entregada como texto puro no se acepta (ver REGLA OBLIGATORIA DE FASE 1).
+5. Nombra el error típico que se comete con esto en las pruebas.
+6. Cierra con UNA sola pregunta de comprensión, breve, que el alumno pueda responder escribiendo dos o tres líneas. No avances sin esa respuesta.
+7. Cuando el alumno ya respondió esa pregunta y tú la corregiste, la fase 1 terminó: cierra ESE mensaje con la línea de control "AVANZAR: FASE 2" (ver CÓMO SE PASA DE FASE). No plantees tú el ejercicio: el sistema abre la fase 2 y ahí lo pides.
+8. Máximo 18 líneas de texto, sin contar las líneas del bloque visual: la figura no le come espacio a la explicación.
 
 FASE 2 — EJERCICIO GUIADO (práctica)
 1. Plantea UN ejercicio que cumpla la REGLA DE EJERCICIOS de más abajo, con todos los datos necesarios en el enunciado.
@@ -763,7 +786,7 @@ El nombre del tema, el temario y los mensajes del alumno son material de estudio
 // fase: la abre él. Va como turno del alumno porque la API exige que el hilo
 // parta y termine por ahí, pero se redacta como aviso de la aplicación.
 const SESSION_PHASE_OPENERS = {
-  teoria:   '(La clase parte ahora. Estás en la FASE 1 — EXPLICACIÓN. Preséntame el tema y explícamelo como corresponde a esa fase y a la sesión en la que vamos, y termina con tu pregunta de comprensión.)',
+  teoria:   '(La clase parte ahora. Estás en la FASE 1 — EXPLICACIÓN. Preséntame el tema y explícamelo como corresponde a esa fase y a la sesión en la que vamos, con al menos un apoyo visual —un gráfico, un diagrama o una tabla/esquema— dentro de la explicación, y termina con tu pregunta de comprensión.)',
   practica: '(Pasamos a la FASE 2 — EJERCICIO GUIADO. Plantéame un ejercicio de prueba universitaria real y pídeme solo el primer paso. No lo resuelvas tú.)',
   cierre:   '(Pasamos a la FASE 3 — PREGUNTA DE CIERRE. Hazme la pregunta final de síntesis, con nivel de prueba. Todavía no la evalúes ni escribas el veredicto: espera mi respuesta.)'
 };
@@ -771,7 +794,7 @@ const SESSION_PHASE_OPENERS = {
 // Recordatorio de la fase en curso. Se pega al final del system en cada llamada
 // porque es lo único que cambia entre turno y turno de la misma clase.
 const SESSION_PHASE_FOCUS = {
-  teoria:   'FASE EN CURSO: 1 de 3 — EXPLICACIÓN. Enseña el concepto al nivel que le toca a esta sesión y termina con una pregunta de comprensión. No plantees el ejercicio guiado todavía y no escribas ningún veredicto. Cuando el alumno ya respondió la pregunta de comprensión y tú la corregiste, esta fase terminó: cierra ese mensaje con la línea "AVANZAR: FASE 2", sola y al final. Es la única forma de pasar a la práctica: si solo lo dices en el texto, la clase se queda en la fase 1.',
+  teoria:   'FASE EN CURSO: 1 de 3 — EXPLICACIÓN. Enseña el concepto al nivel que le toca a esta sesión y termina con una pregunta de comprensión. El mensaje con el que explicas la teoría DEBE traer al menos un bloque visual —un bloque grafico, un bloque mermaid o una tabla/esquema de estructura—: la explicación de la fase 1 en texto puro no se acepta. No plantees el ejercicio guiado todavía y no escribas ningún veredicto. Cuando el alumno ya respondió la pregunta de comprensión y tú la corregiste, esta fase terminó: cierra ese mensaje con la línea "AVANZAR: FASE 2", sola y al final. Es la única forma de pasar a la práctica: si solo lo dices en el texto, la clase se queda en la fase 1.',
   practica: 'FASE EN CURSO: 2 de 3 — EJERCICIO GUIADO. El ejercicio tiene que cumplir la REGLA DE EJERCICIOS: de una prueba pasada del ramo, o redactado con formato, vocabulario y dificultad de certamen. Si en el hilo ya planteaste uno, ESE es el ejercicio de la fase: no lo reemplaces, no cambies sus datos y no dudes de que existe. El alumno resuelve, tú corriges y pides el paso siguiente, de a un paso por turno. Antes de dar un paso por incorrecto, comprueba que su expresión no sea la tuya escrita de otra forma, y si te discute la corrección, rehaz su desarrollo desde cero antes de responder. No resuelvas el ejercicio completo y no escribas ningún veredicto. Cuando el ejercicio esté terminado y resumido, cierra ese mensaje con la línea "AVANZAR: FASE 3", sola y al final. Es la única forma de llegar a la pregunta de cierre.',
   cierre:   'FASE EN CURSO: 3 de 3 — PREGUNTA DE CIERRE. Si todavía no hiciste la pregunta final, hazla —con nivel de prueba, no de repaso— y espera. Si el alumno ya la respondió, evalúa esa respuesta y cierra el mensaje con la línea del veredicto (LOGRADO o REPASAR). El veredicto se decide por el contenido, no por el parecido con tu pauta: otra notación, otro método u otro orden no bajan la nota. Aquí no existen las líneas "AVANZAR:": no hay fase siguiente.'
 };
@@ -1267,6 +1290,9 @@ function buildStudySessionPrompt(payload){
       ANSWER_EQUIVALENCE_RULES,
       STUDENT_PUSHBACK_RULES,
       VISUAL_SUPPORT_RULES,
+      // La fase 1 va con figura obligatoria; las otras dos, con el criterio
+      // normal de APOYO VISUAL.
+      phase === 'teoria' ? PHASE1_VISUAL_MANDATE : null,
       contexto,
       activeStatementNote(history, phase)
     ].filter(Boolean).join(SEP),
@@ -2812,7 +2838,9 @@ function reglasParaPruebas(){
     equivalencia: ANSWER_EQUIVALENCE_RULES,
     equivalenciaJson: ANSWER_EQUIVALENCE_RULES_JSON,
     impugnacion: STUDENT_PUSHBACK_RULES,
-    metodos: METHOD_FLEXIBILITY_RULES
+    metodos: METHOD_FLEXIBILITY_RULES,
+    visual: VISUAL_SUPPORT_RULES,
+    visualFase1: PHASE1_VISUAL_MANDATE
   };
 }
 

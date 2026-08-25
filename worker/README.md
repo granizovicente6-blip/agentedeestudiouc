@@ -178,7 +178,7 @@ admitir el error de inmediato si lo tenía.
 ## Qué se prueba sin gastar API key
 
 ```bash
-node --test worker/tests/equivalencia.test.mjs
+node --test worker/tests/*.test.mjs
 ```
 
 - `banco.mjs` es la lista de correcciones reales: a la izquierda lo que dice la
@@ -192,6 +192,12 @@ node --test worker/tests/equivalencia.test.mjs
 - También se comprueba que las exportaciones con nombre de `worker.js` sean todas
   funciones: workerd rechaza el módulo de entrada si exporta una constante y el
   Worker no arranca.
+- `apoyo-visual.test.mjs` cubre la otra regla dura de la clase guiada: que la
+  **REGLA OBLIGATORIA DE FASE 1** viaje en el system prompt cuando la fase en
+  curso es la 1 —y solo ahí—, y que el parser de figuras de `app.js` dibuje los
+  tres recursos que ofrece. El parser no se importa: `app.js` es un script de
+  página, así que se recorta el tramo de las figuras y se evalúa aparte, que es
+  exactamente el mismo código que corre en el navegador.
 
 ## Qué se prueba contra el modelo (gasta API key)
 
@@ -204,8 +210,22 @@ a la del profesor, y el alumno insiste después de que el tutor lo rechazó. El
 veredicto automático es por marcas de texto y puede equivocarse, así que imprime
 la respuesta completa del tutor: lo que decide es leerla.
 
-Sin `--url` apunta a `http://localhost:8787`, que necesita `wrangler dev` con
-`ANTHROPIC_API_KEY` en `worker/.dev.vars`.
+```bash
+node worker/tests/live-visual.mjs --url https://agentedestudio.<cuenta>.workers.dev
+```
+
+Cuatro aperturas de fase 1, elegidas por lo que ponen a prueba: un tema que se
+ve en el plano, uno de clasificación, uno de procedimiento y uno puramente
+conceptual —el caso difícil, porque no hay nada que graficar en ejes y es donde
+el modelo se tentaba con entregar tres párrafos de texto—. De cada respuesta se
+comprueban dos cosas: que traiga al menos un bloque visual, y que ese bloque lo
+dibuje el parser de `app.js`. Un bloque con la sintaxis mal escrita se ve como
+texto suelto en la pantalla del alumno, así que para efectos de la regla es lo
+mismo que no haberlo puesto.
+
+Sin `--url` los dos apuntan a `http://localhost:8787`, que necesita `wrangler
+dev` con `ANTHROPIC_API_KEY` en `worker/.dev.vars`. Con `wrangler dev --remote`
+la clave sale del secreto ya desplegado y no hace falta tenerla en el disco.
 
 ---
 

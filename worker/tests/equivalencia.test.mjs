@@ -3,7 +3,7 @@
    =============================================================================
    Se corren sin API key y sin red:
 
-     node --test worker/tests/
+     node --test worker/tests/*.test.mjs
 
    Dos cosas se comprueban aquí. Primero, que el banco de `banco.mjs` sea cierto:
    cada par se evalúa con el motor numérico, así que la lista de formas que el

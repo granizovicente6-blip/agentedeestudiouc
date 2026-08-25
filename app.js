@@ -6693,6 +6693,21 @@ function renderChartFence(code){
 
 const DG_EDGE_RE = /^\s*(-{2,3}>|-{3}|-\.->|={2,}>|~~~)\s*(?:\|([^|]*)\|)?\s*/;
 
+// Lo que el modelo mete dentro de una etiqueta de Mermaid y aquí no sirve de
+// nada: el <br> con que Mermaid parte una línea —esta app parte las etiquetas
+// sola, midiendo la caja— y las entidades con que escapa los signos de
+// comparación. Sin limpiarlas, la caja termina mostrando "<br/>" y "&gt;" como
+// si fueran texto, que es peor que la línea larga que se querían evitar.
+const DG_ENTIDADES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
+
+function dgLabelText(raw){
+  return String(raw)
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/gi, (m, e) => DG_ENTIDADES[e.toLowerCase()] || m)
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function dgReadNode(text){
   const head = text.match(/^\s*([A-Za-z0-9_]+)\s*/);
   if(!head) return null;
@@ -6708,9 +6723,9 @@ function dgReadNode(text){
       else if(rest[k] === close){ depth--; if(depth === 0){ k++; break; } }
     }
     if(depth !== 0) return null;              // paréntesis sin cerrar
-    label = rest.slice(0, k)
+    label = dgLabelText(rest.slice(0, k)
       .replace(/^[[({]+/, '').replace(/[\])}]+$/, '')
-      .replace(/^["']|["']$/g, '').trim();
+      .replace(/^["']|["']$/g, ''));
     shape = open === '{' ? 'diamond' : open === '(' ? 'round' : 'rect';
     rest = rest.slice(k);
   }
@@ -6751,13 +6766,17 @@ function parseFlowSpec(code){
       const next = dgReadNode(rest);
       if(!next) break;
       touch(next);
-      edges.push({ from, to: next.id, label: (link[2] || '').trim() });
+      edges.push({ from, to: next.id, label: dgLabelText(link[2] || '') });
       from = next.id;
       rest = next.rest;
     }
   }
 
-  if(!nodes.size) return null;
+  // Sin flechas no hay diagrama: eso es texto que se dejó leer como si fueran
+  // nodos —un "mindmap", una lista de conceptos, un pseudocódigo—, y dibujarlo
+  // deja cajas sueltas flotando sin nada que las una. Cae a bloque de texto,
+  // que al menos muestra lo que el modelo quiso escribir.
+  if(!nodes.size || !edges.length) return null;
   return { dir, nodes: [...nodes.values()], edges };
 }
 
@@ -6955,7 +6974,12 @@ function chatMarkdownToHtml(text){
     const raw = lines[i];
 
     // Bloque con cerca: se consume entero, incluida la cerca de cierre.
-    const fence = raw.match(/^\s*```+\s*([A-Za-zÀ-ÿ0-9_-]*)\s*$/);
+    //
+    // De la línea de apertura solo importa la primera palabra: el modelo escribe
+    // a veces "```grafico Equilibrio de mercado", y con el patrón anclado al final
+    // eso dejaba de ser una cerca, así que el bloque entero —tildes incluidas— se
+    // pintaba como párrafos sueltos. Lo que venga después del nombre se descarta.
+    const fence = raw.match(/^\s*```+\s*([A-Za-zÀ-ÿ0-9_-]*)[^\n]*$/);
     if(fence){
       closeList();
       const body = [];
