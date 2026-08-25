@@ -142,12 +142,21 @@ const MAX_CHAT_STEP_CHARS    = 240;
 const SESSION_PHASES              = ['teoria', 'practica', 'cierre'];
 const MAX_SESSION_MESSAGE_CHARS   = 1500;   // lo que escribe el alumno
 const MAX_SESSION_HISTORY_TURNS   = 16;     // mensajes previos que se conservan
-const MAX_SESSION_HISTORY_CHARS   = 9000;   // tope acumulado del historial
+// El acumulado subió de 9000: con el tope viejo, una fase 1 larga se comía el
+// presupuesto y el recorte llegaba hasta el turno donde el profesor había
+// planteado el ejercicio de la fase 2. Sin ese turno, el profesor negaba su
+// propio enunciado ("¿de dónde sacaste esos números?"). Ahora, además, los
+// turnos de la fase en curso no entran en el reparto: van siempre (ver
+// `keepPhase` en normalizeHistory).
+const MAX_SESSION_HISTORY_CHARS   = 26000;  // tope acumulado del historial
 // Igual que en el chat: el turno del profesor trae la explicación, el ejercicio
-// y a veces un gráfico, y con el tope del alumno llegaba cortado al turno
-// siguiente. El acumulado del historial no cambia.
-const MAX_SESSION_HISTORY_IA_CHARS = 2600;
+// y a veces un gráfico. El tope calza con lo que el frontend guarda de cada
+// respuesta (MAX_SESSION_REPLY_CHARS en app.js), así que un enunciado nunca
+// vuelve cortado en el historial.
+const MAX_SESSION_HISTORY_IA_CHARS = 4500;
 const MAX_SESSION_REPLY_CHARS     = 6500;   // lo que se publica de la respuesta
+// Cuánto del enunciado de la fase en curso se repite dentro del system prompt.
+const MAX_SESSION_STATEMENT_CHARS = 3200;
 
 // Programa del tema: cuántas sesiones puede tener y cuánto material de
 // evaluaciones pasadas se le manda al profesor para que saque los ejercicios de
@@ -211,6 +220,9 @@ const DONT_KNOW_OPTION = 'No lo sé / Tengo dudas';
 // Las cercas de tres tildes se escriben en una constante: dentro de un template
 // literal habría que escaparlas una por una y el prompt se vuelve ilegible.
 const FENCE = '```';
+
+// Separador entre los bloques de un system prompt armado por partes.
+const SEP = '\n\n';
 
 // Aritmética comprobada antes de escribir. El modelo se equivoca en cuentas de
 // primero básico cuando responde de corrido; obligarlo a resolver y verificar
@@ -673,6 +685,14 @@ Todo ejercicio, caso o pregunta que plantees en las fases 2 y 3 tiene que ser de
 6. Exigencia mínima: el ejercicio tiene que tener al menos dos pasos de desarrollo o una decisión que justificar. Si te sale un ejercicio que se responde en una línea sin calcular ni justificar, no sirve: hazlo de nuevo más difícil.
 7. Cuando el ejercicio venga de una evaluación pasada del ramo, dilo en una línea antes del enunciado ("Esto es de una prueba pasada de tu ramo"). No lo digas si lo redactaste tú.
 
+MEMORIA DE LA CLASE (regla dura, por encima de cualquier duda que tengas)
+El hilo de mensajes es tu memoria de esta clase y no tienes otra. Todo lo que aparece ahí lo escribiste tú o el alumno, hoy, en esta sesión.
+1. Nunca niegues ni pongas en duda algo que ya dijiste. Si en el hilo hay un enunciado, unos datos o una pregunta tuya, están planteados: el alumno los está respondiendo.
+2. Prohibido preguntarle al alumno de dónde sacó los datos, decirle que todavía no tiene ejercicio o pedirle que te repita un enunciado que redactaste tú. Si dudas, relee el hilo y el bloque ENUNCIADO ACTIVO que el sistema te repite en las fases 2 y 3 antes de escribir.
+3. Los números del alumno se corrigen contra los datos del enunciado que está en juego, nunca contra datos que supongas ni contra un ejercicio distinto.
+4. Antes de corregir, mira QUÉ magnitud te entregó. Si calculó bien una magnitud distinta de la que le pediste, eso no es un error de aritmética: confirma su cálculo, nombra las dos magnitudes con sus cifras y pídele la que faltaba. Ejemplo: si el enunciado dice que la empresa vendió 400.000 litros a $20 y compró $800.000 de insumos, el valor bruto de producción es 400.000 x 20 = $8.000.000 y el valor agregado es 8.000.000 - 800.000 = $7.200.000; si le pediste el valor de producción y te responde $7.200.000, dile que ese número es el valor agregado, que está bien calculado, y que el valor de producción son los $8.000.000, que es el paso previo.
+5. Si de verdad no encuentras el enunciado en el hilo, replantéalo tú completo antes de pedir nada más: reconstruir la clase es trabajo tuyo, no del alumno.
+
 PROFUNDIDAD SEGÚN LA SESIÓN
 El tema está repartido en un programa de varias sesiones y el sistema te dice en cuál vas ("Sesión X de Y"). El nivel de los ejercicios sube con el número de sesión:
 - Sesión 1: fundamentos del tema y ejercicios de prueba de nivel base — los más directos que aparecen en un control, de una sola mecánica bien aplicada.
@@ -710,7 +730,7 @@ const SESSION_PHASE_OPENERS = {
 // porque es lo único que cambia entre turno y turno de la misma clase.
 const SESSION_PHASE_FOCUS = {
   teoria:   'FASE EN CURSO: 1 de 3 — EXPLICACIÓN. Enseña el concepto al nivel que le toca a esta sesión y termina con una pregunta de comprensión. No plantees el ejercicio guiado todavía y no escribas ningún veredicto. Cuando el alumno ya respondió la pregunta de comprensión y tú la corregiste, esta fase terminó: cierra ese mensaje con la línea "AVANZAR: FASE 2", sola y al final. Es la única forma de pasar a la práctica: si solo lo dices en el texto, la clase se queda en la fase 1.',
-  practica: 'FASE EN CURSO: 2 de 3 — EJERCICIO GUIADO. El ejercicio tiene que cumplir la REGLA DE EJERCICIOS: de una prueba pasada del ramo, o redactado con formato, vocabulario y dificultad de certamen. El alumno resuelve, tú corriges y pides el paso siguiente, de a un paso por turno. No resuelvas el ejercicio completo y no escribas ningún veredicto. Cuando el ejercicio esté terminado y resumido, cierra ese mensaje con la línea "AVANZAR: FASE 3", sola y al final. Es la única forma de llegar a la pregunta de cierre.',
+  practica: 'FASE EN CURSO: 2 de 3 — EJERCICIO GUIADO. El ejercicio tiene que cumplir la REGLA DE EJERCICIOS: de una prueba pasada del ramo, o redactado con formato, vocabulario y dificultad de certamen. Si en el hilo ya planteaste uno, ESE es el ejercicio de la fase: no lo reemplaces, no cambies sus datos y no dudes de que existe. El alumno resuelve, tú corriges y pides el paso siguiente, de a un paso por turno. No resuelvas el ejercicio completo y no escribas ningún veredicto. Cuando el ejercicio esté terminado y resumido, cierra ese mensaje con la línea "AVANZAR: FASE 3", sola y al final. Es la única forma de llegar a la pregunta de cierre.',
   cierre:   'FASE EN CURSO: 3 de 3 — PREGUNTA DE CIERRE. Si todavía no hiciste la pregunta final, hazla —con nivel de prueba, no de repaso— y espera. Si el alumno ya la respondió, evalúa esa respuesta y cierra el mensaje con la línea del veredicto (LOGRADO o REPASAR). Aquí no existen las líneas "AVANZAR:": no hay fase siguiente.'
 };
 
@@ -1011,20 +1031,27 @@ function buildTopicChatPrompt(payload){
     // Comprobar la aritmética y dibujar una figura ocupan líneas que antes no
     // existían: con 1400 la respuesta llegaba cortada justo en el gráfico.
     maxTokens: 1900,
-    messages: mergeTurns([...history, { role: 'user', content: userMessage }])
+    messages: mergeTurns([...startWithUser(history), { role: 'user', content: userMessage }])
   };
 }
 
 // Historial de un modo conversacional: pares alumno/IA ya intercambiados. Se
 // recorta por el final (los últimos turnos son los que dan sentido al mensaje
 // actual) y se descartan los mensajes vacíos o con un rol que no reconocemos.
+//
+// Cada turno queda en { role, content, phase }. `phase` solo la manda la clase
+// guiada (el chat no tiene fases) y es la fase en la que se dijo ese turno.
+//
+// `limits.keepPhase` marca la fase que NO entra en el reparto de caracteres: sus
+// turnos viajan siempre completos, aunque el resto del historial se quede sin
+// presupuesto. Es lo que garantiza que el enunciado del ejercicio que el propio
+// profesor acaba de plantear no desaparezca del hilo.
 function normalizeHistory(rawList, limits){
   const raw = Array.isArray(rawList) ? rawList : [];
-  const history = [];
-  let chars = 0;
-  for(let i = raw.length - 1; i >= 0; i--){
-    if(history.length >= limits.maxTurns) break;
-    const item = raw[i];
+
+  // 1. Limpieza, en orden: rol, texto y fase de cada turno que sirva.
+  const items = [];
+  for(const item of raw){
     if(!item || typeof item !== 'object') continue;
     const role = (item.role === 'assistant' || item.role === 'ia') ? 'assistant'
                : (item.role === 'user' || item.role === 'alumno') ? 'user'
@@ -1037,13 +1064,44 @@ function normalizeHistory(rawList, limits){
     const clean = role === 'assistant' ? cleanRichText : cleanText;
     const content = clean(item.content != null ? item.content : item.text, cap);
     if(!content) continue;
-    if(chars + content.length > limits.maxChars) break;
-    chars += content.length;
-    history.unshift({ role, content });
+    const phase = SESSION_PHASES.includes(String(item.phase)) ? String(item.phase) : null;
+    items.push({ role, content, phase });
   }
-  // La API exige que el hilo empiece por el alumno.
-  while(history.length && history[0].role !== 'user') history.shift();
-  return history;
+
+  // 2. Los turnos de la fase protegida se apartan enteros: son los últimos del
+  //    hilo y son los que le dan sentido a lo que el alumno está respondiendo
+  //    ahora mismo.
+  let head = items;
+  let keep = [];
+  if(limits.keepPhase){
+    const from = items.findIndex(m => m.phase === limits.keepPhase);
+    if(from >= 0){
+      head = items.slice(0, from);
+      keep = items.slice(from);
+    }
+  }
+
+  // 3. Lo anterior se rellena hacia atrás con lo que quede de presupuesto.
+  const history = [];
+  let chars = keep.reduce((acc, m) => acc + m.content.length, 0);
+  let turns  = keep.length;
+  for(let i = head.length - 1; i >= 0; i--){
+    if(turns >= limits.maxTurns) break;
+    if(chars + head[i].content.length > limits.maxChars) break;
+    chars += head[i].content.length;
+    turns += 1;
+    history.unshift(head[i]);
+  }
+  return history.concat(keep);
+}
+
+// La API exige que el hilo empiece por un turno del alumno. En el chat el
+// historial siempre parte por la pregunta del alumno, así que un turno del
+// ayudante en la cabeza solo puede ser basura de un recorte.
+function startWithUser(history){
+  const out = history.slice();
+  while(out.length && out[0].role !== 'user') out.shift();
+  return out;
 }
 
 // Dos turnos seguidos del mismo rol se juntan en uno. Pasa de verdad: si una
@@ -1053,7 +1111,9 @@ function mergeTurns(list){
   for(const item of list){
     const last = messages[messages.length - 1];
     if(last && last.role === item.role) last.content += `\n\n${item.content}`;
-    else messages.push({ ...item });
+    // Solo { role, content }: el historial de la clase arrastra la fase de cada
+    // turno y la API rechaza cualquier campo de más dentro de un mensaje.
+    else messages.push({ role: item.role, content: item.content });
   }
   return messages;
 }
@@ -1143,11 +1203,14 @@ function buildStudySessionPrompt(payload){
     SESSION_PHASE_FOCUS[phase]
   ].filter(v => v !== null).join('\n');
 
+  // La fase en curso no entra en el reparto de caracteres: sus turnos —entre
+  // ellos el enunciado del ejercicio— viajan siempre completos.
   const history = normalizeHistory(payload.history, {
     maxTurns: MAX_SESSION_HISTORY_TURNS,
     maxChars: MAX_SESSION_HISTORY_CHARS,
     maxMessageChars: MAX_SESSION_MESSAGE_CHARS,
-    maxAssistantChars: MAX_SESSION_HISTORY_IA_CHARS
+    maxAssistantChars: MAX_SESSION_HISTORY_IA_CHARS,
+    keepPhase: phase
   });
 
   // Sin respuesta del alumno el turno es la apertura de la fase: la pide la
@@ -1155,15 +1218,79 @@ function buildStudySessionPrompt(payload){
   const turn = userResponse || SESSION_PHASE_OPENERS[phase];
 
   return {
-    system: `${SESSION_SYSTEM_PROMPT}\n\n${MATH_RIGOR_RULES}\n\n${METHOD_FLEXIBILITY_RULES}\n\n${VISUAL_SUPPORT_RULES}\n\n${contexto}`,
+    system: [
+      SESSION_SYSTEM_PROMPT,
+      MATH_RIGOR_RULES,
+      METHOD_FLEXIBILITY_RULES,
+      VISUAL_SUPPORT_RULES,
+      contexto,
+      activeStatementNote(history, phase)
+    ].filter(Boolean).join(SEP),
     // Ver el comentario del chat: el desarrollo comprobado y la figura no caben
     // en el tope anterior, y una clase cortada a la mitad se nota mucho más.
     maxTokens: 2800,
     phase,
     sessionIndex,
     totalSessions,
-    messages: mergeTurns([...history, { role: 'user', content: turn }])
+    messages: mergeTurns([...sessionThread(history), { role: 'user', content: turn }])
   };
+}
+
+// Repone los turnos de apertura de fase que el navegador no guarda.
+//
+// Cada fase la abre la aplicación con un turno del alumno (SESSION_PHASE_OPENERS)
+// que no queda en el hilo: en el historial que vuelve, el mensaje con que el
+// profesor abrió la fase 2 queda pegado justo detrás del último de la fase 1.
+// Como los dos son del profesor, mergeTurns los juntaba en uno solo y el
+// enunciado del ejercicio terminaba leyéndose como un ejemplo más de la teoría
+// —de ahí el "¿de dónde sacaste esos números?, si todavía no tienes ejercicio"—.
+// Reponiendo la apertura, cada fase vuelve a ser un tramo con su propio inicio.
+//
+// Como efecto de paso, el hilo empieza por un turno del alumno sin tener que
+// borrar el primer mensaje del profesor: la apertura de su fase va delante.
+function sessionThread(history){
+  const out = [];
+  let current = null;
+  for(const item of history){
+    if(item.phase && item.phase !== current){
+      out.push({ role: 'user', content: SESSION_PHASE_OPENERS[item.phase] });
+      current = item.phase;
+    }
+    out.push({ role: item.role, content: item.content });
+  }
+  // Historial sin fases (una clase que venía abierta desde antes de este cambio):
+  // al menos que el hilo no parta por el profesor.
+  if(out.length && out[0].role !== 'user'){
+    out.unshift({ role: 'user', content: '(Retomamos la clase donde la dejamos.)' });
+  }
+  return out;
+}
+
+// El enunciado del ejercicio que está sobre la mesa, repetido dentro del system.
+//
+// Es el primer turno del profesor de la fase en curso: en la fase 2, el ejercicio
+// guiado; en la 3, la pregunta de cierre. Va en las instrucciones y no solo en el
+// hilo porque es el dato que el profesor no puede perder nunca: sin él delante
+// corrige al alumno contra un ejercicio que no existe.
+function activeStatementNote(history, phase){
+  if(phase === 'teoria') return '';
+  const first = history.find(m => m.role === 'assistant' && m.phase === phase);
+  const texto = first ? cleanRichText(first.content, MAX_SESSION_STATEMENT_CHARS) : '';
+  if(!texto) return '';
+
+  const que = phase === 'practica' ? 'el ejercicio guiado' : 'la pregunta de cierre';
+  return [
+    'ENUNCIADO ACTIVO DE ESTA FASE (lo escribiste tú y el alumno ya lo tiene en pantalla)',
+    `Este es, textual, el mensaje con el que abriste ${que} de esta fase:`,
+    '---',
+    texto,
+    '---',
+    'Reglas sobre este enunciado, por encima de cualquier otra impresión que tengas:',
+    '1. Ese ejercicio YA está planteado. Nunca digas que el alumno todavía no tiene ejercicio, nunca le preguntes de dónde sacó los datos y nunca le pidas que te repita el enunciado: los datos son los de arriba y los pusiste tú.',
+    '2. Los números que use el alumno se comprueban contra ESOS datos. Si una cifra suya no calza, el error es de él o tuyo al calcular, nunca del enunciado.',
+    '3. Si calculó bien pero otra magnitud distinta de la que le pediste, dilo con esa precisión: nombra las dos con sus cifras —la que calculó y la que te faltaba—, reconoce lo que hizo bien y pídele la que corresponde. Eso no es un error de aritmética.',
+    '4. No cambies los datos, las cifras ni las partes del ejercicio a mitad de camino, y no plantees otro hasta terminar este.'
+  ].join('\n');
 }
 
 // Separa la señal de cambio de fase de la respuesta del profesor. Devuelve

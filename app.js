@@ -7499,11 +7499,21 @@ function pushSessionNote(s, text, tone){
   s.thread.push({ kind: 'note', tone: tone || '', content: text });
 }
 
+// Cada turno viaja con la fase en la que se dijo. El Worker la necesita para dos
+// cosas: reponer el turno con que la aplicación abre cada fase —que no queda en
+// el hilo, y sin él el enunciado de la fase 2 se le pegaba al último mensaje de
+// la fase 1— y no soltar nunca los turnos de la fase en curso al recortar el
+// historial. Sin eso, el profesor terminaba negando el ejercicio que él mismo
+// acababa de plantear.
 function sessionHistory(s){
   return s.thread
     .filter(m => m.kind === 'msg')
     .slice(-MAX_SESSION_HISTORY_TURNS)
-    .map(m => ({ role: m.role, content: m.content }));
+    .map(m => ({
+      role: m.role,
+      content: m.content,
+      phase: (SESSION_PHASES[m.phase] && SESSION_PHASES[m.phase].key) || null
+    }));
 }
 
 /* --- Apertura y cierre ------------------------------------------------------ */
